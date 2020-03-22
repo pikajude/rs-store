@@ -1,0 +1,27 @@
+[package]
+name = "nix-store"
+version = "0.1.0"
+authors = ["jude"]
+edition = "2018"
+
+[dependencies]
+serde_json = "1.0.48"
+thiserror = "1.0.11"
+nix = { version = "0.17.0", optional = true }
+derive_more = "0.99.3"
+lazy_static = "1.4.0"
+tokio = "0.2.13"
+futures = "0.3.4"
+lru = "0.4.3"
+rusqlite = "0.21.0"
+
+[dependencies.serde]
+version = "1.0.105"
+features = ["derive"]
+
+[build-dependencies]
+serde = { version = "1.0.105", features = ["derive"] }
+serde_json = "1.0.48"
+
+[dev-dependencies]
+hex-literal = "0.2.1"
