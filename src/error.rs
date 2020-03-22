@@ -1,7 +1,7 @@
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-  #[error("Invalid path")]
-  InvalidPath(crate::path::StorePath),
+  #[error("Invalid path `{0}`")]
+  InvalidPath(String),
   #[error("Path `{0}` is not a store path")]
   BadStorePath(std::path::PathBuf),
   #[error("Path `{0}` is not in the Nix store")]
@@ -20,6 +20,8 @@ pub enum Error {
   Io(#[from] std::io::Error),
   #[error("Deadlock when attempting to read state")]
   Deadlock,
+  #[error("Unsupported operation: {0}")]
+  Unsupported(&'static str),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

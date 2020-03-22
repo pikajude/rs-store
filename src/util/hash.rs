@@ -21,6 +21,23 @@ lazy_static! {
   };
 }
 
+/// The hash of an item in the Nix store. Construct this using `FromStr` and
+/// print it using `Display`.
+///
+/// ```
+/// # use nix_store::util::hash::Hash;
+/// let store_hash = "7rnqb733s45x3x07612wrqjncx6ljp4p";
+/// let parsed = store_hash.parse::<Hash>();
+///
+/// assert!(parsed.is_ok());
+/// assert_eq!(parsed.unwrap().to_string(), store_hash);
+/// ```
+///
+/// ```
+/// # use nix_store::util::hash::*;
+/// let too_short = "7rnqb7";
+/// assert_eq!(too_short.parse::<Hash>(), Err(Error::InvalidLength(6)));
+/// ```
 #[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Clone)]
 pub struct Hash([u8; Self::HASH_BYTES]);
 
@@ -30,6 +47,26 @@ impl Hash {
 
   pub const fn empty() -> Self {
     Self([0u8; Self::HASH_BYTES])
+  }
+
+  pub fn base16(&self) -> String {
+    unimplemented!()
+  }
+
+  pub fn base32(&self) -> String {
+    self.to_string()
+  }
+
+  pub fn base64(&self) -> String {
+    unimplemented!()
+  }
+
+  pub fn compressed(bytes: &[u8]) -> Self {
+    let mut this = Self::empty();
+    for (i, byte) in bytes.iter().enumerate() {
+      this.0[i % Self::HASH_BYTES] ^= byte;
+    }
+    this
   }
 }
 

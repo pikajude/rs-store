@@ -16,12 +16,7 @@ struct Cache {
   priority: usize,
 }
 
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd)]
-enum Outcome {
-  Valid(NarInfo),
-  Invalid,
-  Unknown,
-}
+pub type Outcome = Option<NarInfo>;
 
 impl NarInfoDiskCache {
   pub fn new() -> Self {
@@ -32,7 +27,7 @@ impl NarInfoDiskCache {
     unimplemented!()
   }
 
-  pub fn lookup<P: AsRef<str>, Q: AsRef<str>>(&self, uri: P, hash_part: Q) -> Outcome {
+  pub fn lookup<P: AsRef<str>, Q: AsRef<str>>(&self, uri: P, hash_part: Q) -> Option<Outcome> {
     unimplemented!()
   }
 
