@@ -16,20 +16,24 @@ use std::{
   sync::{Arc, Mutex},
 };
 
+pub async fn open<U: AsRef<str>>(uri: U) -> Result<Box<dyn Store>> {
+  unimplemented!()
+}
+
 #[async_trait]
 pub trait Store: Send + Sync {
   fn get_uri(&self) -> String;
   fn store_path(&self) -> &Path;
-  fn parse_path<P: AsRef<Path>>(&self, path: P) -> Result<StorePath> {
+  fn parse_path(&self, path: &Path) -> Result<StorePath> {
     StorePath::from_path(path)
   }
   fn print_path(&self, path: &StorePath) -> String {
     format!("{}/{}", self.store_path().display(), path)
   }
-  fn is_in_store<P: AsRef<Path>>(&self, path: P) -> bool {
-    path.as_ref().strip_prefix(self.store_path()).is_ok()
+  fn is_in_store(&self, path: &Path) -> bool {
+    path.strip_prefix(self.store_path()).is_ok()
   }
-  fn is_store_path<P: AsRef<Path>>(&self, path: P) -> bool {
+  fn is_store_path(&self, path: &Path) -> bool {
     self.parse_path(path).is_ok()
   }
   fn to_store_path(&self, path: &Path) -> Result<PathBuf> {
@@ -81,7 +85,7 @@ pub trait Store: Send + Sync {
   fn query_all_valid_paths(&self) -> Result<StorePathSet> {
     Err(Error::Unsupported("query_all_valid_paths"))
   }
-  async fn query_path_info(&self, path: &StorePath) -> Result<PathInfo>;
+  async fn query_path_info(&self, path: &StorePath) -> Result<Option<PathInfo>>;
 }
 
 #[test]

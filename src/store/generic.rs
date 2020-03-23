@@ -2,7 +2,7 @@ use crate::{
   error::*,
   path::StorePath,
   path_info::PathInfo,
-  state::{NarInfoDiskCache, Outcome, PathInfoCacheValue},
+  state::{NarInfoDiskCache, PathInfoCacheValue},
   stats::Stats,
   store::Store,
   util::mutex::*,
@@ -31,7 +31,7 @@ impl<T: Store> Store for GenericStore<T> {
     self.store.store_path()
   }
 
-  async fn query_path_info(&self, path: &StorePath) -> Result<PathInfo> {
+  async fn query_path_info(&self, path: &StorePath) -> Result<Option<PathInfo>> {
     let hash = path.hash().to_string();
 
     if let Some(x) = self.info_cache.nlock()?.get(&hash) {

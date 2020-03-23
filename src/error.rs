@@ -18,6 +18,8 @@ pub enum Error {
   BadStorePathName,
   #[error("I/O error: {0}")]
   Io(#[from] std::io::Error),
+  #[error("DB error: {0}")]
+  Db(#[from] rusqlite::Error),
   #[error("Deadlock when attempting to read state")]
   Deadlock,
   #[error("Unsupported operation: {0}")]

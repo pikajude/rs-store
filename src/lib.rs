@@ -1,4 +1,6 @@
+#![feature(try_blocks)]
 #[macro_use] extern crate async_trait;
+#[macro_use] extern crate rusqlite;
 
 pub mod error;
 mod nar_info;
