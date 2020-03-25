@@ -1,4 +1,4 @@
-use crate::{nar_info::NarInfo, path_info::PathInfo};
+use crate::{error::*, nar_info::NarInfo, path_info::PathInfo};
 use rusqlite::{Connection, Statement};
 use std::{collections::HashMap, path::PathBuf};
 
@@ -19,7 +19,7 @@ struct Cache {
 pub type Outcome = Option<NarInfo>;
 
 impl NarInfoDiskCache {
-  pub fn new() -> Self {
+  pub fn new() -> Result<Self> {
     unimplemented!()
   }
 
@@ -31,5 +31,6 @@ impl NarInfoDiskCache {
     unimplemented!()
   }
 
-  pub fn upsert<P: AsRef<str>, Q: AsRef<str>>(&self, uri: P, hash_part: Q, info: PathInfo) {}
+  pub fn upsert<P: AsRef<str>, Q: AsRef<str>>(&self, uri: P, hash_part: Q, info: Option<PathInfo>) {
+  }
 }

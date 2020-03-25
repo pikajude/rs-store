@@ -1,99 +1,197 @@
-use lazy_static::lazy_static;
-use std::{fmt, str::FromStr};
+use crate::util::base32;
+use std::{cmp::Ordering, fmt, str::FromStr};
 
-#[derive(Debug, thiserror::Error, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+#[derive(Debug, thiserror::Error, PartialEq, Eq, Clone)]
 pub enum Error {
-  #[error("Invalid length `{0}` for base32 hash")]
-  InvalidLength(usize),
+  #[error("Given hash is too long: got {given} bytes, expected at most {limit}")]
+  InvalidLength { given: usize, limit: usize },
+  #[error("Invalid length {len} for hash type {ty}")]
+  IncorrectLength { ty: HashType, len: usize },
   #[error("Invalid character `{0}` in base32 hash")]
   InvalidChar(char),
+  #[error("No hash type provided, and it cannot be inferred from the input")]
+  TypeNotProvided,
+  #[error("Hash type `{0}` not recognized")]
+  UnknownHashType(String),
+  #[error("{0}")]
+  Base16(#[from] base16::DecodeError),
+  #[error("{0}")]
+  Base32(#[from] base32::Error),
+  #[error("{0}")]
+  Base64(#[from] base64::DecodeError),
 }
 
-static BASE32_CHARS: &[u8; 32] = b"0123456789abcdfghijklmnpqrsvwxyz";
+#[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Clone, Copy, derive_more::Display)]
+pub enum HashType {
+  Md5,
+  Sha1,
+  Sha256,
+  Sha512,
+}
 
-lazy_static! {
-  static ref BASE32_CHARS_REVERSE: [u8; 256] = {
-    let mut xs = [0xffu8; 256];
-    for (n, c) in BASE32_CHARS.iter().enumerate() {
-      xs[*c as usize] = n as u8;
+impl FromStr for HashType {
+  type Err = Error;
+
+  fn from_str(s: &str) -> Result<Self, Self::Err> {
+    Ok(match s {
+      "md5" => Self::Md5,
+      "sha1" => Self::Sha1,
+      "sha256" => Self::Sha256,
+      "sha512" => Self::Sha512,
+      x => return Err(Error::UnknownHashType(x.into())),
+    })
+  }
+}
+
+impl HashType {
+  pub fn len(self) -> usize {
+    match self {
+      Self::Md5 => 16,
+      Self::Sha1 => 20,
+      Self::Sha256 => 32,
+      Self::Sha512 => 64,
     }
-    xs
-  };
+  }
+
+  pub fn base16_len(self) -> usize {
+    self.len() * 2
+  }
+
+  pub fn base32_len(self) -> usize {
+    (self.len() * 8 - 1) / 5 + 1
+  }
+
+  pub fn base64_len(self) -> usize {
+    ((4 * self.len() / 3) + 3) & !3
+  }
 }
 
-/// The hash of an item in the Nix store. Construct this using `FromStr` and
-/// print it using `Display`.
+/// A signature computed from some data somewhere. This can be an MD5, SHA1,
+/// SHA2, or SHA512 hash.
 ///
-/// ```
-/// # use nix_store::util::hash::Hash;
-/// let store_hash = "7rnqb733s45x3x07612wrqjncx6ljp4p";
-/// let parsed = store_hash.parse::<Hash>();
+/// In serialized form, hashes are almost always prefixed with the hash type. A
+/// notable exception is the hash found in store paths like
+/// `/nix/store/vaxhh4bg6smwbrid99g62x54y2hk1ph3-rustc-1.41.0`, which is a
+/// sha256 hash of the derivation's contents truncated to 20 bytes and base32
+/// encoded.
 ///
-/// assert!(parsed.is_ok());
-/// assert_eq!(parsed.unwrap().to_string(), store_hash);
-/// ```
+/// Examples:
 ///
-/// ```
-/// # use nix_store::util::hash::*;
-/// let too_short = "7rnqb7";
-/// assert_eq!(too_short.parse::<Hash>(), Err(Error::InvalidLength(6)));
-/// ```
-#[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Clone)]
-pub struct Hash([u8; Self::HASH_BYTES]);
+/// * `sha256:1yzhjn8rsvjjsfycdc993ms6jy2j5jh7x3r2ax6g02z5n0anvnbx`
+/// * `sha512:+CvDC7ZttU/sSt9rFjix/P05iS43qHCOOGzcr3Ry99bXG7VX953+vFyEuph/
+///   tfqoYu8dttBkE86JSKBO2OzcxA==`
+/// * `vaxhh4bg6smwbrid99g62x54y2hk1ph3`
+pub struct Hash {
+  data: [u8; 64],
+  len: usize,
+}
 
 impl Hash {
-  pub const HASH_BYTES: usize = 20;
-  pub const HASH_CHARS: usize = 32;
-
-  pub const fn empty() -> Self {
-    Self([0u8; Self::HASH_BYTES])
-  }
-
-  pub fn base16(&self) -> String {
-    unimplemented!()
-  }
-
-  pub fn base32(&self) -> String {
-    self.to_string()
-  }
-
-  pub fn base64(&self) -> String {
-    unimplemented!()
-  }
-
-  pub fn compressed(bytes: &[u8]) -> Self {
-    let mut this = Self::empty();
-    for (i, byte) in bytes.iter().enumerate() {
-      this.0[i % Self::HASH_BYTES] ^= byte;
+  pub(crate) fn from_data(in_: &[u8]) -> Self {
+    assert!(in_.len() <= 64);
+    let mut data = [0; 64];
+    {
+      let (l, _) = data.split_at_mut(in_.len());
+      l.copy_from_slice(in_);
     }
+    Self {
+      data,
+      len: in_.len(),
+    }
+  }
+
+  /// Try to parse an unprefixed string as a hash of a certain type. As in other
+  /// places, `ty` is only used to compute the expected hash length.
+  ///
+  /// To parse a string which includes hash type information, use the `FromStr`
+  /// instance.
+  pub fn parse_typed(s: &str, ty: HashType) -> Result<Self, Error> {
+    unimplemented!()
+  }
+
+  pub fn base16(&self, with_type: bool) -> String {
+    base16::encode_lower(self.as_ref())
+  }
+
+  pub fn base32(&self, with_type: bool) -> String {
+    base32::encode(self.as_ref())
+  }
+
+  pub fn base64(&self, with_type: bool) -> String {
+    base64::encode(&self)
+  }
+
+  pub fn sri(&self) -> String {
+    unimplemented!()
+  }
+
+  /// Truncate `self` to a given length by XOR-ing the trailing bytes.
+  ///
+  /// No-op if `len >= self.len`.
+  pub fn truncate(&self, len: usize) -> Self {
+    if len >= self.len {
+      return self.clone();
+    }
+    unimplemented!()
+  }
+}
+
+impl AsRef<[u8]> for Hash {
+  fn as_ref(&self) -> &[u8] {
+    &self.data[0..self.len]
+  }
+}
+
+impl AsMut<[u8]> for Hash {
+  fn as_mut(&mut self) -> &mut [u8] {
+    &mut self.data[0..self.len]
+  }
+}
+
+impl Clone for Hash {
+  fn clone(&self) -> Self {
+    let mut this = Self {
+      data: [0; 64],
+      len: self.len,
+    };
+    this.data.copy_from_slice(&self.data);
     this
   }
 }
 
-impl fmt::Display for Hash {
-  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-    let mut bytes = [b'0'; Self::HASH_CHARS];
+impl PartialEq for Hash {
+  fn eq(&self, other: &Hash) -> bool {
+    self.len == other.len && &self.data[..] == &other.data[..]
+  }
+}
 
-    let mut nr_bits_left: usize = 0;
-    let mut bits_left: u16 = 0;
-    let mut pos = bytes.len();
+impl Eq for Hash {}
 
-    for b in &self.0 {
-      bits_left |= (*b as u16) << nr_bits_left;
-      nr_bits_left += 8;
-      while nr_bits_left > 5 {
-        bytes[pos - 1] = BASE32_CHARS[(bits_left & 0x1f) as usize];
-        pos -= 1;
-        bits_left >>= 5;
-        nr_bits_left -= 5;
-      }
+impl PartialOrd for Hash {
+  fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+    let cmp = self.len.partial_cmp(&other.len)?;
+    if cmp == Ordering::Equal {
+      self.data[..].partial_cmp(&other.data[..])
+    } else {
+      Some(cmp)
     }
+  }
+}
 
-    if nr_bits_left > 0 {
-      bytes[pos - 1] = BASE32_CHARS[(bits_left & 0x1f) as usize];
+impl Ord for Hash {
+  fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    let cmp = self.len.cmp(&other.len);
+    if cmp == Ordering::Equal {
+      self.data[..].cmp(&other.data[..])
+    } else {
+      cmp
     }
+  }
+}
 
-    write!(f, "{}", unsafe { std::str::from_utf8_unchecked(&bytes) })
+impl fmt::Debug for Hash {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    f.debug_tuple("Hash").field(&self.as_ref()).finish()
   }
 }
 
@@ -101,61 +199,42 @@ impl FromStr for Hash {
   type Err = Error;
 
   fn from_str(s: &str) -> Result<Self, Self::Err> {
-    if s.len() != Self::HASH_CHARS {
-      return Err(Error::InvalidLength(s.len()));
+    if let Some(ix) = s.find(':') {
+      let ty = s[..ix].parse::<HashType>()?;
+      let rest = &s[ix + 1..];
+      // input is base16
+      if rest.len() == ty.base16_len() {
+        Ok(Self::from_data(&base16::decode(rest)?))
+      } else if rest.len() == ty.base32_len() {
+        Ok(Self::from_data(&base32::decode(rest)?))
+      } else if rest.len() == ty.base64_len() {
+        Ok(Self::from_data(&base64::decode(rest)?))
+      } else {
+        Err(Error::IncorrectLength {
+          ty,
+          len: rest.len(),
+        })
+      }
+    } else if let Some(ix) = s.find('-') {
+      unimplemented!("SRI")
+    } else {
+      Err(Error::TypeNotProvided)
     }
-    let mut bytes = [0u8; Self::HASH_BYTES];
-    let mut ix = 0;
-
-    let mut nr_bits_left: usize = 0;
-    let mut bits_left: u16 = 0;
-
-    for c in s.chars().rev() {
-      if c > 0xffu8 as char {
-        return Err(Error::InvalidChar(c));
-      }
-      let byte = BASE32_CHARS_REVERSE[c as usize];
-      if byte == 0xff {
-        return Err(Error::InvalidChar(c));
-      }
-      bits_left |= (byte as u16) << nr_bits_left;
-      nr_bits_left += 5;
-      if nr_bits_left >= 8 {
-        bytes[ix] = (bits_left & 0xff) as u8;
-        ix += 1;
-        bits_left >>= 8;
-        nr_bits_left -= 8;
-      }
-    }
-
-    assert!(!(nr_bits_left > 0 && bits_left != 0));
-
-    Ok(Self(bytes))
   }
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
-  use hex_literal::hex;
   #[test]
-  fn parse() {
-    assert_eq!(
-      "7rnqb733s45x3x07612wrqjncx6ljp4p".parse::<Hash>(),
-      Ok(Hash(hex!(
-        "97 5c 49 4d 67 56 e2 cc 45 30 07 f4 d1 0b d1 63 9c 85 6d 3e"
-      )))
-    )
+  fn test_ref() {
+    let h = Hash::from_data(&[1, 2, 3]);
+    assert_eq!(h.as_ref(), &[1, 2, 3]);
   }
 
   #[test]
-  fn encode() {
-    assert_eq!(
-      "7rnqb733s45x3x07612wrqjncx6ljp4p"
-        .parse::<Hash>()
-        .unwrap()
-        .to_string(),
-      "7rnqb733s45x3x07612wrqjncx6ljp4p"
-    );
+  fn test_trunc() {
+    let h = Hash::from_data(&[1, 2, 3, 4, 5]);
+    assert_eq!(h.truncate(2).as_ref(), &[4, 5]);
   }
 }

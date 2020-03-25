@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
   #[error("Invalid path `{0}`")]
@@ -9,15 +11,20 @@ pub enum Error {
   #[error(".narinfo file is corrupt")]
   BadNarInfo,
   #[error("{0}")]
-  Base32(#[from] crate::util::hash::Error),
+  Hash(#[from] crate::util::hash::Error),
+  #[error("{0}")]
+  Base32(#[from] crate::util::base32::Error),
   #[error("Store path name is empty")]
   StorePathNameEmpty,
   #[error("Store path name is longer than 211 characters")]
   StorePathNameTooLong,
   #[error("Store path name contains forbidden characters")]
   BadStorePathName,
-  #[error("I/O error: {0}")]
-  Io(#[from] std::io::Error),
+  #[error("{error} at path: {path:?}")]
+  Io {
+    error: std::io::Error,
+    path: Option<PathBuf>,
+  },
   #[error("DB error: {0}")]
   Db(#[from] rusqlite::Error),
   #[error("Deadlock when attempting to read state")]

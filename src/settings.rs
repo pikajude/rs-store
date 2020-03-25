@@ -1,11 +1,12 @@
+use crate::util::ext::*;
 use std::path::{Path, PathBuf};
 
-#[cfg(target = "unix")]
+#[cfg(unix)]
 fn root() -> bool {
   nix::unistd::getuid().is_root()
 }
 
-#[cfg(not(target = "unix"))]
+#[cfg(not(unix))]
 fn root() -> bool {
   false
 }
@@ -26,7 +27,7 @@ pub struct Settings {
   store_path: PathBuf,
   log_dir: PathBuf,
   state_dir: PathBuf,
-  daemon_socket: PathBuf,
+  daemon_socket: Option<PathBuf>,
   build_users_group: Option<String>,
   lock_cpu: bool,
   ca_file: PathBuf,
@@ -43,7 +44,7 @@ impl Settings {
       log_dir: lookup(&["NIX_LOG_DIR"], || {
         PathBuf::from(bs.local_state_path).join("log/nix")
       })?,
-      daemon_socket: lookup(&[], || state_dir.join("daemon-socket/socket"))?,
+      daemon_socket: lookup(&[], || state_dir.join("daemon-socket/socket")).ok(),
       state_dir,
       build_users_group: if root() { None } else { Some("nixbld".into()) },
       lock_cpu: std::env::var("NIX_AFFINITY_HACK").map_or(false, |y| y == "1"),
@@ -68,12 +69,12 @@ impl Settings {
     &self.state_dir
   }
 
-  pub fn daemon_socket(&self) -> &Path {
-    &self.daemon_socket
+  pub fn daemon_socket(&self) -> Option<&Path> {
+    self.daemon_socket.as_deref()
   }
 
-  pub fn build_users_group(&self) -> &Option<String> {
-    &self.build_users_group
+  pub fn build_users_group(&self) -> Option<&str> {
+    self.build_users_group.as_deref()
   }
 
   /// True if `NIX_AFFINITY_HACK` is set to 1.
@@ -91,11 +92,14 @@ impl Settings {
 fn lookup<F: FnOnce() -> P, P: AsRef<Path>>(
   vars: &'static [&'static str],
   x: F,
-) -> std::io::Result<PathBuf> {
+) -> crate::error::Result<PathBuf> {
   for v in vars {
     if let Ok(x) = std::env::var(v) {
-      return PathBuf::from(x).canonicalize();
+      return PathBuf::from(&x).canonicalize().on_path(x);
     }
   }
-  PathBuf::from(x().as_ref()).canonicalize()
+  let fallback = x();
+  PathBuf::from(fallback.as_ref())
+    .canonicalize()
+    .on_path(fallback)
 }

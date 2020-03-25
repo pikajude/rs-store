@@ -1,6 +1,6 @@
 use crate::{path::StorePath, util::hash::Hash};
 use chrono::{DateTime, Utc};
-use std::{collections::BTreeSet, time::SystemTime};
+use std::collections::BTreeSet;
 
 #[derive(Clone, Debug)]
 pub struct PathInfo {

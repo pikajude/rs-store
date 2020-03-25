@@ -1,23 +1,34 @@
 mod generic;
 pub mod local;
-pub use generic::GenericStore;
+pub use generic::NixStore;
 
 use crate::{
   error::*,
   path::{StorePath, StorePathSet},
   path_info::PathInfo,
   state::{NarInfoDiskCache, PathInfoCacheValue},
-  util::{hash::Hash, sha::sha256},
+  util::{ext::*, hash::Hash, sha::sha256},
 };
 use async_trait::async_trait;
+use local::LocalStore;
 use lru::LruCache;
 use std::{
   path::{Path, PathBuf},
   sync::{Arc, Mutex},
 };
 
-pub async fn open<U: AsRef<str>>(uri: U) -> Result<Box<dyn Store>> {
+/// Open a store. The store type will be inferred based on the given URI.
+pub async fn open<U: AsRef<str>>(uri: U) -> Result<NixStore<Box<dyn Store>>> {
   unimplemented!()
+}
+
+pub async fn open_local() -> Result<NixStore<LocalStore>> {
+  Ok(
+    open("local")
+      .await?
+      .downcast()
+      .unwrap_or_else(|_| unreachable!()),
+  )
 }
 
 #[async_trait]
@@ -45,22 +56,22 @@ pub trait Store: Send + Sync {
   fn follow_links_to_store(&self, path: &Path) -> Result<PathBuf> {
     let mut path: PathBuf = path.into();
     while !self.is_in_store(&path) {
-      path = path.read_link()?;
+      path = path.read_link().on_path(&path)?;
     }
     Ok(path)
   }
   fn follow_links_to_store_path(&self, path: &Path) -> Result<StorePath> {
     StorePath::from_path(self.follow_links_to_store(path)?)
   }
-  fn mk_store_path(&self, hash_type: &str, hash: &Hash, name: &str) -> Result<StorePath> {
+  fn mk_store_path(&self, output_type: &str, hash: &Hash, name: &str) -> Result<StorePath> {
     let s = format!(
       "{}:{}:{}:{}",
-      hash_type,
-      hash.base16(),
+      output_type,
+      hash.base16(false),
       self.store_path().display(),
       name
     );
-    let h = Hash::compressed(&sha256(s.as_bytes()));
+    let h = sha256(s.as_bytes()).truncate(20);
     Ok(StorePath::new(name, h))
   }
   fn mk_output_path(&self, id: &str, hash: &Hash, name: &str) -> Result<StorePath> {
@@ -85,7 +96,7 @@ pub trait Store: Send + Sync {
   fn query_all_valid_paths(&self) -> Result<StorePathSet> {
     Err(Error::Unsupported("query_all_valid_paths"))
   }
-  async fn query_path_info(&self, path: &StorePath) -> Result<Option<PathInfo>>;
+  async fn query_path_info_uncached(&self, path: &StorePath) -> Result<Option<PathInfo>>;
 }
 
 #[test]
