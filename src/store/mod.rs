@@ -6,16 +6,11 @@ use crate::{
   error::*,
   path::{StorePath, StorePathSet},
   path_info::PathInfo,
-  state::{NarInfoDiskCache, PathInfoCacheValue},
   util::{ext::*, hash::Hash, sha::sha256},
 };
 use async_trait::async_trait;
 use local::LocalStore;
-use lru::LruCache;
-use std::{
-  path::{Path, PathBuf},
-  sync::{Arc, Mutex},
-};
+use std::path::{Path, PathBuf};
 
 /// Open a store. The store type will be inferred based on the given URI.
 pub async fn open<U: AsRef<str>>(uri: U) -> Result<NixStore<Box<dyn Store>>> {

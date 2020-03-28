@@ -1,5 +1,5 @@
 use crate::{error::*, nar_info::NarInfo, path_info::PathInfo};
-use rusqlite::{Connection, Statement};
+use rusqlite::Connection;
 use std::{collections::HashMap, path::PathBuf};
 
 #[derive(Debug)]
