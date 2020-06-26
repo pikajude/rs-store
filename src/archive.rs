@@ -15,16 +15,15 @@ pub enum ArchiveData {
   Int(u64),
 }
 
-#[async_recursion(?Send)]
-pub async fn dump_path<P: AsRef<Path>, W: ArchiveSink, F: FnMut(&Path) -> bool>(
-  path: P,
+#[async_recursion]
+pub async fn dump_path<W: ArchiveSink + Send, F: FnMut(&Path) -> bool + Send>(
+  path: &Path,
   sink: &mut W,
   mut filter: F,
 ) -> Result<()>
 where
   Error: From<W::Error>,
 {
-  let path = path.as_ref();
   let meta = tokio::fs::metadata(path).await.somewhere(path)?;
   sink.send(ArchiveData::Tag("(")).await?;
 

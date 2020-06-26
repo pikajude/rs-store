@@ -1,7 +1,12 @@
-use super::HashType;
+use super::{Hash, HashType};
 use crypto::digest::Digest;
 
-pub enum Context {
+pub struct Context {
+  ty: HashType,
+  buf: Buf,
+}
+
+enum Buf {
   Md5(crypto::md5::Md5),
   Sha1(crypto::sha1::Sha1),
   Sha256(crypto::sha2::Sha256),
@@ -10,11 +15,12 @@ pub enum Context {
 
 macro_rules! do_impl {
   ($x:ident, $($t:tt)+) => {
-    match $x {
-      Context::Md5(m) => m.$($t)+,
-      Context::Sha1(m) => m.$($t)+,
-      Context::Sha256(m) => m.$($t)+,
-      Context::Sha512(m) => m.$($t)+,
+    #[allow(unused_mut)]
+    match $x.buf {
+      Buf::Md5(mut m) => m.$($t)+,
+      Buf::Sha1(mut m) => m.$($t)+,
+      Buf::Sha256(mut m) => m.$($t)+,
+      Buf::Sha512(mut m) => m.$($t)+,
     }
   }
 }
@@ -42,12 +48,27 @@ impl Digest for Context {
 }
 
 impl Context {
-  pub fn new(s: HashType) -> Self {
-    match s {
-      HashType::MD5 => Self::Md5(crypto::md5::Md5::new()),
-      HashType::SHA1 => Self::Sha1(crypto::sha1::Sha1::new()),
-      HashType::SHA256 => Self::Sha256(crypto::sha2::Sha256::new()),
-      HashType::SHA512 => Self::Sha512(crypto::sha2::Sha512::new()),
+  pub fn new(ty: HashType) -> Self {
+    Self {
+      ty,
+      buf: match ty {
+        HashType::MD5 => Buf::Md5(crypto::md5::Md5::new()),
+        HashType::SHA1 => Buf::Sha1(crypto::sha1::Sha1::new()),
+        HashType::SHA256 => Buf::Sha256(crypto::sha2::Sha256::new()),
+        HashType::SHA512 => Buf::Sha512(crypto::sha2::Sha512::new()),
+      },
+    }
+  }
+}
+
+impl From<Context> for Hash {
+  fn from(mut c: Context) -> Self {
+    let mut bytes = [0; 64];
+    c.result(&mut bytes);
+    Self {
+      ty: c.ty,
+      len: c.ty.size(),
+      data: bytes,
     }
   }
 }

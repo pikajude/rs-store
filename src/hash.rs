@@ -133,13 +133,7 @@ impl Hash {
   pub fn hash_bytes(data: &[u8], ty: HashType) -> Self {
     let mut ctx = Context::new(ty);
     ctx.input(data);
-    let mut bytes = [0; 64];
-    ctx.result(&mut bytes);
-    Self {
-      ty,
-      data: bytes,
-      len: ty.size(),
-    }
+    ctx.into()
   }
 
   pub async fn hash_file<P: AsRef<Path>>(path: P, ty: HashType) -> Result<Self> {
@@ -158,13 +152,7 @@ impl Hash {
       ctx.input(&buf);
     }
 
-    let mut bytes = [0; 64];
-    ctx.result(&mut bytes);
-    Ok(Self {
-      ty,
-      data: bytes,
-      len: ty.size(),
-    })
+    Ok(ctx.into())
   }
 
   /// Convert `self` to a shorter hash by recursively XOR-ing bytes.

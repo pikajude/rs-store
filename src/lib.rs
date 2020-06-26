@@ -13,7 +13,7 @@ pub mod hash;
 pub mod path;
 pub mod util;
 
-#[async_trait(?Send)]
+#[async_trait]
 pub trait Store {
   fn store_path(&self) -> &Path;
   fn get_uri(&self) -> String;
@@ -23,19 +23,19 @@ pub trait Store {
   ///
   /// For arbitrarily deep descendants of a store directory, try
   /// `store_path_of`.
-  fn parse_store_path<P: AsRef<Path>>(&self, path: P) -> Result<StorePath> {
-    StorePath::new(path.as_ref(), self.store_path())
+  fn parse_store_path(&self, path: &Path) -> Result<StorePath> {
+    StorePath::new(path, self.store_path())
   }
 
   /// If a Nix store path is a parent of `path`, return it. This function will
   /// fail on invalid paths, since it calls `canonicalize`.
-  fn store_path_of<P: AsRef<Path>>(&self, path: P) -> Result<StorePath> {
-    let p = path.as_ref().canonicalize().somewhere(path.as_ref())?;
+  fn store_path_of(&self, path: &Path) -> Result<StorePath> {
+    let p = path.canonicalize().somewhere(path)?;
     if !p.starts_with(self.store_path()) {
       return Err(Error::NotInStore(p));
     }
     self.parse_store_path(
-      p.components()
+      &p.components()
         .take(self.store_path().components().count() + 1)
         .collect::<PathBuf>(),
     )
@@ -145,10 +145,10 @@ pub trait Store {
     )
   }
 
-  async fn store_path_for_file<P: AsRef<Path>>(
+  async fn store_path_for_file(
     &self,
     name: &str,
-    path: P,
+    path: &Path,
     algorithm: HashType,
   ) -> Result<(StorePath, Hash)> {
     let file_hash = Hash::hash_file(path, algorithm).await?;
@@ -158,16 +158,20 @@ pub trait Store {
     ))
   }
 
-  async fn store_path_for_dir<P: AsRef<Path>, F: FnMut(&Path) -> bool>(
+  async fn store_path_for_dir<F: FnMut(&Path) -> bool + Send>(
     &self,
-    _name: &str,
-    path: P,
-    _algorithm: HashType,
+    name: &str,
+    path: &Path,
+    algo: HashType,
     filter: F,
   ) -> Result<(StorePath, Hash)> {
-    let mut h = hash::Sink::new(_algorithm);
+    let mut h = hash::Sink::new(algo);
     archive::dump_path(path, &mut h, filter).await?;
-    todo!()
+    let hash = h.finish();
+    Ok((
+      self.make_fixed_output_path(true, &hash, name, std::iter::empty(), false)?,
+      hash,
+    ))
   }
 }
 
