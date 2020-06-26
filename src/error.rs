@@ -1,36 +1,50 @@
-use std::path::PathBuf;
+use std::{error::Error as StdError, io, path::PathBuf};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-  #[error("Invalid path `{0}`")]
-  InvalidPath(String),
-  #[error("Path `{0}` is not a store path")]
-  BadStorePath(std::path::PathBuf),
-  #[error("Path `{0}` is not in the Nix store")]
-  NotInStore(std::path::PathBuf),
-  #[error(".narinfo file is corrupt")]
-  BadNarInfo,
+  #[error("path is not in the nix store: `{}'", _0.display())]
+  NotInStore(PathBuf),
+  #[error("invalid store path: `{}'", _0.display())]
+  InvalidStorePath(PathBuf),
+  #[error("invalid store path name: {0:?}")]
+  InvalidStorePathName(String),
+  #[error("invalid base32 data")]
+  InvalidBase32,
+  #[error("I/O error: {0}")]
+  Io(io::Error),
+  #[error("I/O error at {1}: {0}")]
+  IoAt(io::Error, PathBuf),
+  #[error("incorrect length `{0}` for store path hash")]
+  HashSize(usize),
   #[error("{0}")]
-  Hash(#[from] crate::util::hash::Error),
-  #[error("{0}")]
-  Base32(#[from] crate::util::base32::Error),
-  #[error("Store path name is empty")]
-  StorePathNameEmpty,
-  #[error("Store path name is longer than 211 characters")]
-  StorePathNameTooLong,
-  #[error("Store path name contains forbidden characters")]
-  BadStorePathName,
-  #[error("{error} at path: {path:?}")]
-  Io {
-    error: std::io::Error,
-    path: Option<PathBuf>,
-  },
-  #[error("DB error: {0}")]
-  Db(#[from] rusqlite::Error),
-  #[error("Deadlock when attempting to read state")]
-  Deadlock,
-  #[error("Unsupported operation: {0}")]
-  Unsupported(&'static str),
+  Other(Box<dyn StdError + Send>),
+}
+
+impl Error {
+  pub fn other<E: StdError + Send + 'static>(err: E) -> Self {
+    Self::Other(Box::new(err))
+  }
+}
+
+impl From<!> for Error {
+  fn from(_: !) -> Self {
+    unreachable!()
+  }
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+pub trait IoExt<T> {
+  fn somewhere<P: Into<PathBuf>>(self, at: P) -> Result<T>;
+  fn nowhere(self) -> Result<T>;
+}
+
+impl<T> IoExt<T> for io::Result<T> {
+  fn somewhere<P: Into<PathBuf>>(self, at: P) -> Result<T> {
+    self.map_err(|e| Error::IoAt(e, at.into()))
+  }
+
+  fn nowhere(self) -> Result<T> {
+    self.map_err(Error::Io)
+  }
+}
