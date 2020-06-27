@@ -15,27 +15,34 @@ enum Buf {
 
 macro_rules! do_impl {
   ($x:ident, $($t:tt)+) => {
-    #[allow(unused_mut)]
     match $x.buf {
-      Buf::Md5(mut m) => m.$($t)+,
-      Buf::Sha1(mut m) => m.$($t)+,
-      Buf::Sha256(mut m) => m.$($t)+,
-      Buf::Sha512(mut m) => m.$($t)+,
+      Buf::Md5(m) => m.$($t)+,
+      Buf::Sha1(m) => m.$($t)+,
+      Buf::Sha256(m) => m.$($t)+,
+      Buf::Sha512(m) => m.$($t)+,
+    }
+  };
+  (mut $x:ident, $($t:tt)+) => {
+    match $x.buf {
+      Buf::Md5(ref mut m) => m.$($t)+,
+      Buf::Sha1(ref mut m) => m.$($t)+,
+      Buf::Sha256(ref mut m) => m.$($t)+,
+      Buf::Sha512(ref mut m) => m.$($t)+,
     }
   }
 }
 
 impl Digest for Context {
   fn input(&mut self, input: &[u8]) {
-    do_impl!(self, input(input))
+    do_impl!(mut self, input(input))
   }
 
   fn result(&mut self, out: &mut [u8]) {
-    do_impl!(self, result(out))
+    do_impl!(mut self, result(out))
   }
 
   fn reset(&mut self) {
-    do_impl!(self, reset())
+    do_impl!(mut self, reset())
   }
 
   fn output_bits(&self) -> usize {

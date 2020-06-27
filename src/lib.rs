@@ -1,16 +1,20 @@
 #![feature(trait_alias, never_type)]
 
-use async_trait::async_trait;
+#[macro_use] extern crate async_trait;
+
 use error::*;
 use hash::{Encoding, Hash, HashType};
 use path::Path as StorePath;
+use path_info::ValidPathInfo;
 use std::path::{Path, PathBuf};
 
 pub mod archive;
 pub mod base32;
 pub mod error;
 pub mod hash;
+pub mod local_store;
 pub mod path;
+pub mod path_info;
 pub mod util;
 
 #[async_trait]
@@ -125,6 +129,7 @@ pub trait Store {
     hash: &Hash,
     references: I,
   ) -> Result<StorePath> {
+    assert!(hash.type_() == HashType::SHA256);
     self.make_store_path(
       &self.make_type("text".into(), references, false),
       hash,
@@ -173,65 +178,6 @@ pub trait Store {
       hash,
     ))
   }
-}
 
-#[cfg(test)]
-mod tests {
-  use super::*;
-
-  struct TestStore;
-
-  impl Store for TestStore {
-    fn store_path(&self) -> &Path {
-      Path::new("/local/nix")
-    }
-
-    fn get_uri(&self) -> String {
-      "local".into()
-    }
-  }
-
-  #[test]
-  fn parse_path() {
-    assert_eq!(
-      TestStore
-        .parse_store_path(Path::new(
-          "/local/nix/5c9a1g1jdqv2jk9k4nbxs9y2445l6jja-foo.txt"
-        ))
-        .expect("failure"),
-      StorePath::from_parts(
-        &[74, 74, 67, 11, 33, 194, 39, 221, 151, 37, 51, 77, 41, 54, 110, 50, 188, 160, 18, 43],
-        "foo.txt"
-      )
-      .expect("failure")
-    );
-
-    assert!(TestStore
-      .parse_store_path(Path::new("/not/in/store"))
-      .is_err());
-  }
-
-  #[test]
-  #[ignore] // runs path.canonicalize()
-  fn to_path() {
-    assert_eq!(
-      &*TestStore
-        .store_path_of(Path::new("/local/nix/foo/bar/baz"))
-        .expect("no parse")
-        .name,
-      "foo"
-    );
-  }
-
-  #[test]
-  fn mk_path() {
-    let h = Hash::hash_str("Hello, world!", HashType::SHA256);
-    let spath = TestStore
-      .make_store_path("source", &h, "foo.txt")
-      .expect("No good");
-    assert_eq!(
-      spath.to_string(),
-      "5c9a1g1jdqv2jk9k4nbxs9y2445l6jja-foo.txt"
-    );
-  }
+  async fn get_path_info_uncached(&self, path: &StorePath) -> Result<ValidPathInfo>;
 }

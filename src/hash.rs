@@ -176,6 +176,14 @@ impl Hash {
   }
 }
 
+impl PartialEq for Hash {
+  fn eq(&self, other: &Self) -> bool {
+    self.as_bytes() == other.as_bytes() && self.ty == other.ty
+  }
+}
+
+impl Eq for Hash {}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -183,39 +191,48 @@ mod tests {
   #[test]
   fn test_md5() {
     assert_eq!(
-      Hash::hash_bytes(b"foobar", HashType::MD5).as_bytes(),
-      [56, 88, 246, 34, 48, 172, 60, 145, 95, 48, 12, 102, 67, 18, 198, 63]
+      Hash::hash_str("foobar", HashType::MD5).encode(Encoding::Base16),
+      {
+        let mut m = crypto::md5::Md5::new();
+        m.input_str("foobar");
+        m.result_str()
+      },
     );
   }
 
   #[test]
   fn test_sha1() {
     assert_eq!(
-      Hash::hash_bytes(b"foobar", HashType::SHA1).as_bytes(),
-      [136, 67, 215, 249, 36, 22, 33, 29, 233, 235, 185, 99, 255, 76, 226, 129, 37, 147, 40, 120]
+      Hash::hash_str("foobar", HashType::SHA1).encode(Encoding::Base16),
+      {
+        let mut m = crypto::sha1::Sha1::new();
+        m.input_str("foobar");
+        m.result_str()
+      },
     );
   }
 
   #[test]
   fn test_sha256() {
     assert_eq!(
-      Hash::hash_bytes(b"foobar", HashType::SHA256).as_bytes(),
-      [
-        195, 171, 143, 241, 55, 32, 232, 173, 144, 71, 221, 57, 70, 107, 60, 137, 116, 229, 146,
-        194, 250, 56, 61, 74, 57, 96, 113, 76, 174, 240, 196, 242
-      ]
+      Hash::hash_str("foobar", HashType::SHA256).encode(Encoding::Base16),
+      {
+        let mut m = crypto::sha2::Sha256::new();
+        m.input_str("foobar");
+        m.result_str()
+      },
     );
   }
 
   #[test]
   fn test_sha512() {
     assert_eq!(
-      Hash::hash_bytes(b"foobar", HashType::SHA512).as_bytes(),
-      &[
-        10, 80, 38, 30, 189, 26, 57, 15, 237, 43, 243, 38, 242, 103, 60, 20, 85, 130, 166, 52, 45,
-        82, 50, 4, 151, 61, 2, 25, 51, 127, 129, 97, 106, 128, 105, 176, 18, 88, 124, 245, 99, 95,
-        105, 37, 241, 181, 108, 54, 2, 48, 193, 155, 39, 53, 0, 238, 1, 62, 3, 6, 1, 191, 36, 37
-      ][..]
+      Hash::hash_str("foobar", HashType::SHA512).encode(Encoding::Base16),
+      {
+        let mut m = crypto::sha2::Sha512::new();
+        m.input_str("foobar");
+        m.result_str()
+      },
     );
   }
 }
