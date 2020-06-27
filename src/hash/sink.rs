@@ -3,6 +3,7 @@ use crate::archive::ArchiveData;
 use crypto::digest::Digest;
 use futures::sink::Sink;
 use std::{
+  convert::Infallible,
   pin::Pin,
   task::{Context, Poll},
 };
@@ -20,7 +21,7 @@ impl HashSink {
 }
 
 impl Sink<ArchiveData> for HashSink {
-  type Error = !;
+  type Error = Infallible;
 
   fn poll_ready(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
     Poll::Ready(Ok(()))

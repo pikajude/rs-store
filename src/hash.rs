@@ -1,7 +1,13 @@
-use crate::error::*;
+use crate::{error::*, util};
 use crypto::digest::Digest;
 use derive_more::Display;
-use std::{borrow::Cow, path::Path};
+use std::{
+  borrow::Cow,
+  fmt::{self, Debug},
+  hash::Hasher,
+  path::Path,
+  str::FromStr,
+};
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 mod context;
@@ -33,6 +39,20 @@ impl HashType {
   }
 }
 
+impl FromStr for HashType {
+  type Err = Error;
+
+  fn from_str(s: &str) -> Result<Self> {
+    Ok(match s {
+      "md5" => Self::MD5,
+      "sha1" => Self::SHA1,
+      "sha256" => Self::SHA256,
+      "sha512" => Self::SHA512,
+      x => return Err(Error::UnknownHashType(x.into())),
+    })
+  }
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum Encoding {
   Base64,
@@ -49,20 +69,16 @@ pub struct Hash {
 }
 
 impl Hash {
-  pub fn parse_with_type(_s: &str, _ty: HashType) -> Result<Self> {
-    todo!()
-  }
-
   fn len_base16(&self) -> usize {
-    self.len * 2
+    len_base16(self.len)
   }
 
   fn len_base32(&self) -> usize {
-    (self.len * 8 - 1) / 5 + 1
+    len_base32(self.len)
   }
 
   fn len_base64(&self) -> usize {
-    ((4 * self.len / 3) + 3) & !3
+    len_base64(self.len)
   }
 
   /// Size in bytes.
@@ -118,12 +134,35 @@ impl Hash {
   }
 
   /// Decode from serialized representation
-  pub fn decode(_s: &str) -> Result<Self> {
-    todo!()
+  pub fn decode(input: &str) -> Result<Self> {
+    if let Some((ty, rest)) = util::break_str(input, ':') {
+      Ok(Self::decode_with_type(rest, ty.parse()?, false)?)
+    } else if let Some((ty, rest)) = util::break_str(input, '-') {
+      Ok(Self::decode_with_type(rest, ty.parse()?, true)?)
+    } else {
+      Err(Error::UntypedHash(input.into()))
+    }
   }
 
-  pub fn decode_with_type(&self, _encoding: Encoding) -> Result<Self> {
-    todo!()
+  pub fn decode_with_type(input: &str, ty: HashType, sri: bool) -> Result<Self> {
+    let mut bytes = [0; 64];
+    if !sri && input.len() == len_base16(ty.size()) {
+      binascii::hex2bin(input.as_bytes(), &mut bytes)?;
+      Ok(Self {
+        data: bytes,
+        ty,
+        len: ty.size(),
+      })
+    } else if !sri && input.len() == len_base32(ty.size()) {
+      crate::base32::decode_into(input.as_bytes(), &mut bytes)?;
+      Ok(Self {
+        data: bytes,
+        ty,
+        len: ty.size(),
+      })
+    } else {
+      todo!()
+    }
   }
 
   pub fn hash_str(data: &str, ty: HashType) -> Self {
@@ -171,6 +210,7 @@ impl Hash {
     })
   }
 
+  #[inline]
   pub fn as_bytes(&self) -> &[u8] {
     &self.data[..self.len]
   }
@@ -178,11 +218,37 @@ impl Hash {
 
 impl PartialEq for Hash {
   fn eq(&self, other: &Self) -> bool {
-    self.as_bytes() == other.as_bytes() && self.ty == other.ty
+    self.ty == other.ty && self.as_bytes() == other.as_bytes()
   }
 }
 
 impl Eq for Hash {}
+
+impl std::hash::Hash for Hash {
+  fn hash<H: Hasher>(&self, state: &mut H) {
+    self.as_bytes().hash(state)
+  }
+}
+
+impl Debug for Hash {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    f.debug_tuple("Hash")
+      .field(&format!("{}:{}", self.ty, self.encode(Encoding::Base64)))
+      .finish()
+  }
+}
+
+fn len_base16(size: usize) -> usize {
+  size * 2
+}
+
+fn len_base32(size: usize) -> usize {
+  (size * 8 - 1) / 5 + 1
+}
+
+fn len_base64(size: usize) -> usize {
+  ((4 * size / 3) + 3) & !3
+}
 
 #[cfg(test)]
 mod tests {

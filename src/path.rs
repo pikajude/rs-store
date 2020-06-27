@@ -32,7 +32,11 @@ impl Path {
 
   pub fn from_parts(bytes: &[u8], name: &str) -> Result<Self> {
     Ok(Path {
-      hash: Hash(bytes.try_into().map_err(|_| Error::HashSize(bytes.len()))?),
+      hash: Hash(
+        bytes
+          .try_into()
+          .map_err(|_| Error::WrongHashLen(bytes.len()))?,
+      ),
       name: name.parse()?,
     })
   }

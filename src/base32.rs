@@ -58,11 +58,11 @@ pub fn encode_into(input: &[u8], output: &mut [u8]) {
   assert_eq!(pos, 0);
 }
 
-pub fn decode(input: &[u8]) -> Result<Vec<u8>> {
-  let mut res = Vec::with_capacity(decode_len(input.len()));
-
+pub fn decode_into(input: &[u8], out: &mut [u8]) -> Result<()> {
   let mut nr_bits_left: usize = 0;
   let mut bits_left: u16 = 0;
+
+  let mut ix = 0;
 
   for c in input.iter().copied().rev() {
     let b = BASE32_CHARS_REVERSE[c as usize];
@@ -72,7 +72,8 @@ pub fn decode(input: &[u8]) -> Result<Vec<u8>> {
     bits_left |= (b as u16) << nr_bits_left;
     nr_bits_left += 5;
     if nr_bits_left >= 8 {
-      res.push((bits_left & 0xff) as u8);
+      out[ix] = bits_left as u8;
+      ix += 1;
       bits_left >>= 8;
       nr_bits_left -= 8;
     }
@@ -81,6 +82,14 @@ pub fn decode(input: &[u8]) -> Result<Vec<u8>> {
   if nr_bits_left > 0 && bits_left != 0 {
     return Err(Error::InvalidBase32);
   }
+
+  Ok(())
+}
+
+pub fn decode(input: &[u8]) -> Result<Vec<u8>> {
+  let mut res = vec![0; decode_len(input.len())];
+
+  decode_into(input, &mut res)?;
 
   Ok(res)
 }
