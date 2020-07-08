@@ -1,9 +1,9 @@
 use crate::{
-  error::*,
   hash::{Encoding, Hash, HashType},
   path::{Path as StorePath, PathSet},
   path_info::{PathInfo, ValidPathInfo},
 };
+use anyhow::Result;
 use bytes::Bytes;
 use futures::Stream;
 use std::{
@@ -38,9 +38,9 @@ pub trait Store: Send + Sync {
   /// `parse_store_path`, this method fails on nonexistent paths, since it calls
   /// `canonicalize`.
   fn store_path_of(&self, path: &Path) -> Result<StorePath> {
-    let p = path.canonicalize().somewhere(path)?;
+    let p = path.canonicalize()?;
     if !p.starts_with(self.store_path()) {
-      return Err(Error::NotInStore(p));
+      return Err(crate::path::Error::NotInStore(p).into());
     }
     self.parse_store_path(
       &p.components()
@@ -193,10 +193,19 @@ pub trait Store: Send + Sync {
     self.get_path_info(path).await.map(|x| x.is_some())
   }
 
-  async fn add_to_store<S: Stream<Item = Result<Bytes>> + Send + Unpin>(
+  async fn add_nar_to_store<S: Stream<Item = Result<Bytes>> + Send + Unpin>(
     &self,
     info: &ValidPathInfo,
     source: S,
+  ) -> Result<()>;
+
+  async fn add_path_to_store<F: FnMut(&Path) -> bool + Send>(
+    &self,
+    name: &str,
+    path: &Path,
+    algo: HashType,
+    filter: F,
+    repair: bool,
   ) -> Result<()>;
 
   async fn add_temp_root(&self, path: &StorePath) -> Result<()>;

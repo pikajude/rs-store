@@ -1,4 +1,4 @@
-use crate::error::*;
+use anyhow::Result;
 use async_recursion::async_recursion;
 use futures::{
   sink::{Sink, SinkExt},
@@ -22,9 +22,9 @@ pub async fn dump_path<W: ArchiveSink + Send, F: FnMut(&Path) -> bool + Send>(
   mut filter: F,
 ) -> Result<()>
 where
-  Error: From<W::Error>,
+  W::Error: std::error::Error + Send + Sync + 'static,
 {
-  let meta = tokio::fs::metadata(path).await.somewhere(path)?;
+  let meta = tokio::fs::metadata(path).await?;
   sink.send(ArchiveData::Tag("(")).await?;
 
   if meta.file_type().is_file() {
@@ -46,13 +46,7 @@ where
     sink.send(ArchiveData::Tag("type")).await?;
     sink.send(ArchiveData::Tag("directory")).await?;
 
-    while let Some(file) = tokio::fs::read_dir(path)
-      .await
-      .somewhere(path)?
-      .next_entry()
-      .await
-      .nowhere()?
-    {
+    while let Some(file) = tokio::fs::read_dir(path).await?.next_entry().await? {
       if filter(&file.path()) {
         sink.send(ArchiveData::Tag("entry")).await?;
         sink.send(ArchiveData::Tag("(")).await?;
@@ -85,7 +79,7 @@ where
 
 async fn dump_file<P: AsRef<Path>, W: ArchiveSink>(path: P, size: u64, sink: &mut W) -> Result<()>
 where
-  Error: From<W::Error>,
+  W::Error: std::error::Error + Send + Sync + 'static,
 {
   sink.send(ArchiveData::Tag("contents")).await?;
   sink.send(ArchiveData::Int(size)).await?;
@@ -93,9 +87,7 @@ where
   let contents = crate::util::open_file(path).await?;
   let mut file_reader = FramedRead::new(contents, BytesCodec::new());
   while let Some(bytes) = file_reader.next().await {
-    sink
-      .send(ArchiveData::Bytes(bytes.nowhere()?.freeze()))
-      .await?;
+    sink.send(ArchiveData::Bytes(bytes?.freeze())).await?;
   }
 
   if size % 8 > 0 {

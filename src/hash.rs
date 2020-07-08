@@ -1,4 +1,5 @@
-use crate::{error::*, util};
+use crate::util;
+use anyhow::Result;
 use crypto::digest::Digest;
 use derive_more::Display;
 use std::{
@@ -13,8 +14,18 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 mod context;
 mod sink;
 
-use context::Context;
+pub use context::Context;
 pub use sink::HashSink as Sink;
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+  #[error("incorrect length `{0}' for hash")]
+  WrongHashLen(usize),
+  #[error("attempt to parse untyped hash `{0}'")]
+  UntypedHash(String),
+  #[error("unknown hash type `{0}'")]
+  UnknownHashType(String),
+}
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Display)]
 pub enum HashType {
@@ -42,7 +53,7 @@ impl HashType {
 impl FromStr for HashType {
   type Err = Error;
 
-  fn from_str(s: &str) -> Result<Self> {
+  fn from_str(s: &str) -> Result<Self, Self::Err> {
     Ok(match s {
       "md5" => Self::MD5,
       "sha1" => Self::SHA1,
@@ -140,14 +151,14 @@ impl Hash {
     } else if let Some((ty, rest)) = util::break_str(input, '-') {
       Ok(Self::decode_with_type(rest, ty.parse()?, true)?)
     } else {
-      Err(Error::UntypedHash(input.into()))
+      Err(Error::UntypedHash(input.into()).into())
     }
   }
 
   pub fn decode_with_type(input: &str, ty: HashType, sri: bool) -> Result<Self> {
     let mut bytes = [0; 64];
     if !sri && input.len() == len_base16(ty.size()) {
-      binascii::hex2bin(input.as_bytes(), &mut bytes)?;
+      binascii::hex2bin(input.as_bytes(), &mut bytes).map_err(|e| anyhow::anyhow!("{:?}", e))?;
       Ok(Self {
         data: bytes,
         ty,
@@ -185,7 +196,7 @@ impl Hash {
     let mut ctx = Context::new(ty);
     loop {
       let mut buf = [0; 8192];
-      if r.read(&mut buf).await.nowhere()? == 0 {
+      if r.read(&mut buf).await? == 0 {
         break;
       }
       ctx.input(&buf);

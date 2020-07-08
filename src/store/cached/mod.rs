@@ -1,9 +1,9 @@
 use crate::{
-  error::*,
   path::Path as StorePath,
   path_info::{PathInfo, ValidPathInfo},
   Store,
 };
+use anyhow::Result;
 use bytes::Bytes;
 use disk::{CacheEntry, DiskCache};
 use futures::{lock::Mutex, Stream};
@@ -85,11 +85,25 @@ impl<S: Store> Store for Cached<S> {
     self.store.add_temp_root(path).await
   }
 
-  async fn add_to_store<I: Stream<Item = Result<Bytes>> + Send + Unpin>(
+  async fn add_nar_to_store<I: Stream<Item = Result<Bytes>> + Send + Unpin>(
     &self,
     info: &ValidPathInfo,
     source: I,
   ) -> Result<()> {
-    self.store.add_to_store(info, source).await
+    self.store.add_nar_to_store(info, source).await
+  }
+
+  async fn add_path_to_store<F: FnMut(&Path) -> bool + Send>(
+    &self,
+    name: &str,
+    path: &Path,
+    algo: crate::hash::HashType,
+    filter: F,
+    repair: bool,
+  ) -> Result<()> {
+    self
+      .store
+      .add_path_to_store(name, path, algo, filter, repair)
+      .await
   }
 }

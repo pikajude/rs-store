@@ -1,15 +1,14 @@
 use super::dirs::Dirs;
-use crate::error::{IoExt, Result};
+use anyhow::{Context as _, Result};
 use futures::Future;
 use libc::{c_int, flock, EINTR, EWOULDBLOCK, LOCK_EX, LOCK_NB, LOCK_SH, LOCK_UN};
-use nix::errno::errno;
 use std::{
   io,
   os::unix::io::AsRawFd,
   pin::Pin,
   task::{Context, Poll},
 };
-use tokio::fs::File;
+use tokio::fs::{File, OpenOptions};
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub enum LockType {
@@ -31,7 +30,11 @@ impl LockType {
 pub async fn open_gc_lock(d: &Dirs, l: LockType) -> Result<File> {
   let gc_lock = d.state_dir().join("gc.lock");
   debug!("acquiring global GC lock at `{}'", gc_lock.display());
-  let f = File::open(&gc_lock).await.somewhere(&gc_lock)?;
+  let f = OpenOptions::new()
+    .create_new(true)
+    .write(true)
+    .open(&gc_lock)
+    .await?;
   if !f.try_lock(l)? {
     info!("waiting for the big GC lock at `{}'...", gc_lock.display());
     f.lock(l).await?;
@@ -52,7 +55,7 @@ impl FsExt2 for tokio::fs::File {
         return Ok(false);
       }
       if errno != EINTR {
-        return Err(io::Error::from_raw_os_error(errno)).nowhere();
+        return Err(io::Error::from_raw_os_error(errno).into());
       }
     }
     Ok(true)
@@ -78,7 +81,7 @@ impl<'a> Future for FileLock<'a> {
         return Poll::Pending;
       }
       if errno != EINTR {
-        return Poll::Ready(Err(io::Error::from_raw_os_error(errno)).nowhere());
+        return Poll::Ready(Err(io::Error::from_raw_os_error(errno).into()));
       }
     }
     Poll::Ready(Ok(()))

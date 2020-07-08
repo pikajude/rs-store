@@ -1,5 +1,11 @@
-use crate::error::*;
+use anyhow::Result;
 use lazy_static::lazy_static;
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+  #[error("invalid base32 character")]
+  InvalidBase32,
+}
 
 static BASE32_CHARS: [u8; 32] = *b"0123456789abcdfghijklmnpqrsvwxyz";
 
@@ -58,7 +64,7 @@ pub fn encode_into(input: &[u8], output: &mut [u8]) {
   assert_eq!(pos, 0);
 }
 
-pub fn decode_into(input: &[u8], out: &mut [u8]) -> Result<()> {
+pub fn decode_into(input: &[u8], out: &mut [u8]) -> Result<(), Error> {
   let mut nr_bits_left: usize = 0;
   let mut bits_left: u16 = 0;
 
@@ -86,7 +92,7 @@ pub fn decode_into(input: &[u8], out: &mut [u8]) -> Result<()> {
   Ok(())
 }
 
-pub fn decode(input: &[u8]) -> Result<Vec<u8>> {
+pub fn decode(input: &[u8]) -> Result<Vec<u8>, Error> {
   let mut res = vec![0; decode_len(input.len())];
 
   decode_into(input, &mut res)?;

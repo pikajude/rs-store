@@ -5,7 +5,6 @@
 
 pub mod archive;
 pub mod base32;
-pub mod error;
 pub mod hash;
 pub mod path;
 pub mod path_info;

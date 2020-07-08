@@ -1,13 +1,29 @@
-use crate::{base32, error::*};
+use crate::base32;
+use anyhow::Result;
 use derive_more::{Deref, Display};
 use std::{
-  cmp::Ordering, collections::BTreeSet, convert::TryInto, fmt, path::Path as StdPath, str::FromStr,
+  cmp::Ordering,
+  collections::BTreeSet,
+  convert::TryInto,
+  fmt,
+  path::{Path as StdPath, PathBuf},
+  str::FromStr,
 };
 
 pub const HASH_BYTES: usize = 20;
 pub const HASH_CHARS: usize = 32;
 
 pub type PathSet = BTreeSet<Path>;
+
+#[derive(thiserror::Error, Debug)]
+pub enum Error {
+  #[error("path is not in the nix store: `{}'", _0.display())]
+  NotInStore(PathBuf),
+  #[error("invalid filepath for store: `{}'", _0.display())]
+  InvalidFilepath(PathBuf),
+  #[error("invalid store path name: {0:?}")]
+  InvalidStorePathName(String),
+}
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Display)]
 #[display(fmt = "{}-{}", hash, name)]
@@ -19,7 +35,7 @@ pub struct Path {
 impl Path {
   pub fn new(p: &StdPath, store_dir: &StdPath) -> Result<Self> {
     if p.parent() != Some(store_dir) {
-      return Err(Error::NotInStore(p.into()));
+      return Err(Error::NotInStore(p.into()).into());
     }
 
     Self::from_base_name(
@@ -35,7 +51,7 @@ impl Path {
       hash: Hash(
         bytes
           .try_into()
-          .map_err(|_| Error::WrongHashLen(bytes.len()))?,
+          .map_err(|_| crate::hash::Error::WrongHashLen(bytes.len()))?,
       ),
       name: name.parse()?,
     })
@@ -43,7 +59,7 @@ impl Path {
 
   pub fn from_base_name(base_name: &str) -> Result<Self> {
     if base_name.len() < HASH_CHARS + 1 || base_name.as_bytes()[HASH_CHARS] != b'-' {
-      return Err(Error::InvalidFilepath(base_name.into()));
+      return Err(Error::InvalidFilepath(base_name.into()).into());
     }
 
     Ok(Path {
@@ -98,7 +114,7 @@ pub struct Name(String);
 impl FromStr for Name {
   type Err = Error;
 
-  fn from_str(s: &str) -> Result<Self> {
+  fn from_str(s: &str) -> Result<Self, Error> {
     fn is_valid_char(c: char) -> bool {
       c.is_ascii_alphabetic()
         || c.is_ascii_digit()

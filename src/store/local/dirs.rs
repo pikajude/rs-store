@@ -1,4 +1,4 @@
-use crate::error::*;
+use anyhow::Result;
 use once_cell::sync::OnceCell;
 use std::path::{Path, PathBuf};
 
@@ -7,8 +7,8 @@ pub struct Dirs(PathBuf);
 impl Dirs {
   pub fn new<P: AsRef<Path>>(root: P) -> Result<Self> {
     let s = Self(root.as_ref().into());
-    std::fs::create_dir_all(s.state_dir()).somewhere(s.state_dir())?;
-    std::fs::create_dir_all(s.db_dir()).somewhere(s.db_dir())?;
+    std::fs::create_dir_all(s.temproots_dir())?;
+    std::fs::create_dir_all(s.db_dir())?;
     Ok(s)
   }
 
@@ -29,5 +29,10 @@ impl Dirs {
   pub fn db_dir(&self) -> &Path {
     static DIR: OnceCell<PathBuf> = OnceCell::new();
     DIR.get_or_init(|| self.state_dir().join("db"))
+  }
+
+  pub fn temproots_dir(&self) -> &Path {
+    static DIR: OnceCell<PathBuf> = OnceCell::new();
+    DIR.get_or_init(|| self.state_dir().join("temproots"))
   }
 }

@@ -1,4 +1,5 @@
-use crate::{error::*, path_info::PathInfo};
+use crate::path_info::PathInfo;
+use anyhow::Result;
 use std::{borrow::Borrow, collections::HashMap, hash::Hash, path::PathBuf, sync::Arc};
 
 pub struct DiskCache {

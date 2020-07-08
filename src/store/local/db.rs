@@ -1,10 +1,10 @@
 use crate::{
-  error::*,
   hash::Hash,
   path::{Path as StorePath, PathSet},
   path_info::ValidPathInfo,
   Store,
 };
+use anyhow::Result;
 use rusqlite::Connection;
 use std::{
   collections::BTreeSet,
