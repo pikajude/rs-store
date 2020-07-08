@@ -1,13 +1,13 @@
 use crate::{base32, error::*};
 use derive_more::{Deref, Display};
 use std::{
-  cmp::Ordering, collections::HashSet, convert::TryInto, fmt, path::Path as StdPath, str::FromStr,
+  cmp::Ordering, collections::BTreeSet, convert::TryInto, fmt, path::Path as StdPath, str::FromStr,
 };
 
 pub const HASH_BYTES: usize = 20;
 pub const HASH_CHARS: usize = 32;
 
-pub type PathSet = HashSet<Path>;
+pub type PathSet = BTreeSet<Path>;
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Display)]
 #[display(fmt = "{}-{}", hash, name)]
@@ -24,9 +24,9 @@ impl Path {
 
     Self::from_base_name(
       p.file_name()
-        .ok_or_else(|| Error::InvalidStorePath(p.into()))?
+        .ok_or_else(|| Error::InvalidFilepath(p.into()))?
         .to_str()
-        .ok_or_else(|| Error::InvalidStorePath(p.into()))?,
+        .ok_or_else(|| Error::InvalidFilepath(p.into()))?,
     )
   }
 
@@ -43,7 +43,7 @@ impl Path {
 
   pub fn from_base_name(base_name: &str) -> Result<Self> {
     if base_name.len() < HASH_CHARS + 1 || base_name.as_bytes()[HASH_CHARS] != b'-' {
-      return Err(Error::InvalidStorePath(base_name.into()));
+      return Err(Error::InvalidFilepath(base_name.into()));
     }
 
     Ok(Path {

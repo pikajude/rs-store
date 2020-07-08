@@ -12,7 +12,7 @@ pub struct ValidPathInfo {
   pub nar_hash: Hash,
   pub references: BTreeSet<Path>,
   pub registration_time: SystemTime,
-  pub nar_size: u64,
+  pub nar_size: Option<u64>,
   pub id: u64,
   pub signatures: BTreeSet<String>,
   pub content_addressed: Option<String>,

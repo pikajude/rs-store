@@ -1,5 +1,5 @@
 use std::{
-  convert::Infallible, error::Error as StdError, io, num::TryFromIntError, path::PathBuf,
+  convert::Infallible, error::Error as StdError, io, num::TryFromIntError, path::PathBuf, result,
   sync::PoisonError,
 };
 
@@ -8,8 +8,8 @@ pub enum Error {
   // store path parsing errors
   #[error("path is not in the nix store: `{}'", _0.display())]
   NotInStore(PathBuf),
-  #[error("invalid store path: `{}'", _0.display())]
-  InvalidStorePath(PathBuf),
+  #[error("invalid filepath for store: `{}'", _0.display())]
+  InvalidFilepath(PathBuf),
   #[error("invalid store path name: {0:?}")]
   InvalidStorePathName(String),
   #[error("invalid base32 data")]
@@ -69,7 +69,7 @@ impl From<binascii::ConvertError> for Error {
   }
 }
 
-pub type Result<T> = std::result::Result<T, Error>;
+pub type Result<T> = result::Result<T, Error>;
 
 pub trait IoExt<T> {
   fn somewhere<P: Into<PathBuf>>(self, at: P) -> Result<T>;

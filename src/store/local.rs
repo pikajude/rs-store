@@ -1,18 +1,30 @@
-use crate::{error::*, path::Path as StorePath, path_info::PathInfo, Store};
+use crate::{
+  error::*,
+  path::Path as StorePath,
+  path_info::{PathInfo, ValidPathInfo},
+  Store,
+};
+use bytes::Bytes;
 use db::Db;
-use futures::lock::Mutex;
-use std::{path::Path, sync::Arc};
+use dirs::Dirs;
+use futures::{lock::Mutex, Stream, TryStreamExt};
+use gc::{FsExt2, LockType};
+use std::{borrow::Cow, collections::BTreeSet, path::Path, process, sync::Arc};
+use tokio::{fs, io::AsyncWriteExt};
 
 mod db;
+mod dirs;
+mod gc;
 
-pub struct LocalStore(Mutex<Db>);
-
-assert_impl_all!(LocalStore: Sync);
+pub struct LocalStore {
+  dirs: Dirs,
+  db: Mutex<Db>,
+}
 
 #[async_trait]
 impl Store for LocalStore {
-  fn store_path(&self) -> &Path {
-    Path::new("/nix/store")
+  fn store_path(&self) -> Cow<Path> {
+    Cow::Borrowed(self.dirs.store_dir())
   }
 
   fn get_uri(&self) -> String {
@@ -20,29 +32,115 @@ impl Store for LocalStore {
   }
 
   async fn get_path_info(&self, path: &StorePath) -> Result<Option<Arc<dyn PathInfo>>> {
-    if let Some(x) = self.0.lock().await.get_path_info(self, path)? {
+    // i think i have to destructure here because map() requires Sized
+    if let Some(x) = self.db.lock().await.get_path_info(self, path)? {
       Ok(Some(Arc::new(x)))
     } else {
       Ok(None)
     }
   }
-}
 
-impl LocalStore {
-  pub fn open(p: &Path) -> Result<Self> {
-    Ok(Self(Mutex::new(Db::open(p)?)))
+  async fn get_referrers(&self, path: &StorePath) -> Result<BTreeSet<StorePath>> {
+    self.db.lock().await.get_referrers(self, path)
+  }
+
+  async fn add_temp_root(&self, path: &StorePath) -> Result<()> {
+    let file = self
+      .dirs
+      .state_dir()
+      .join("temproots")
+      .join(process::id().to_string());
+    let mut temp_file = loop {
+      let all_gc_roots = gc::open_gc_lock(&self.dirs, LockType::Read).await?;
+      debug!("{:?}", fs::remove_file(&file).await);
+      let temproots_file = fs::OpenOptions::new()
+        .create_new(true)
+        .open(&file)
+        .await
+        .somewhere(&file)?;
+      drop(all_gc_roots);
+      debug!("acquiring read lock on `{}'", self.print_store_path(path));
+      temproots_file.lock(LockType::Read).await?;
+      if temproots_file.metadata().await.nowhere()?.len() == 0 {
+        break temproots_file;
+      }
+    };
+    debug!("acquiring write lock on `{}'", file.display());
+    temp_file.lock(LockType::Write).await?;
+    temp_file
+      .write(self.print_store_path(path).as_bytes())
+      .await
+      .nowhere()?;
+    temp_file.lock(LockType::Read).await?;
+    Ok(())
+  }
+
+  async fn add_to_store<S: Stream<Item = Result<Bytes>> + Send + Unpin>(
+    &self,
+    info: &ValidPathInfo,
+    mut source: S,
+  ) -> Result<()> {
+    self.add_temp_root(&info.store_path).await?;
+    while let Some(bytes) = source.try_next().await? {
+      eprintln!("{:?}", bytes);
+    }
+    Ok(())
+    // todo!()
   }
 }
 
-#[tokio::test]
-async fn test_local_store() {
-  let store = LocalStore::open(Path::new(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/tests/db.sqlite"
-  )))
-  .expect("no openerino");
-  let path = Path::new("/nix/store/83gajmmszj7827d54kjvk0dg8vpxspq6-nix-2.4/bin/nix");
-  let spath = store.store_path_of(&path).expect("no parse");
-  let path_info = store.get_path_info(&spath).await.expect("no good");
-  assert!(path_info.is_some());
+impl LocalStore {
+  pub fn open(root: &Path) -> Result<Self> {
+    let dirs = Dirs::new(root)?;
+    Ok(Self {
+      db: Mutex::new(Db::open(&dirs.db_dir().join("db.sqlite"))?),
+      dirs,
+    })
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::hash::{Hash, HashType};
+  use std::time::SystemTime;
+
+  #[test]
+  fn test_local_store() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+      let temp = tempfile::tempdir()?;
+      let store = LocalStore::open(temp.as_ref())?;
+      store
+        .add_to_store(
+          &ValidPathInfo {
+            store_path: store.parse_store_path(
+              &temp
+                .as_ref()
+                .join("store/83gajmmszj7827d54kjvk0dg8vpxspq6-nix-2.4"),
+            )?,
+            deriver: None,
+            nar_hash: Hash::hash_bytes(b"foobar", HashType::SHA256),
+            references: Default::default(),
+            registration_time: SystemTime::now(),
+            nar_size: None,
+            id: 0,
+            signatures: Default::default(),
+            content_addressed: None,
+          },
+          crate::util::stream_file(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml")).await?,
+        )
+        .await?;
+      let path = temp
+        .as_ref()
+        .join("store/83gajmmszj7827d54kjvk0dg8vpxspq6-nix-2.4/bin/nix");
+      let spath = store.store_path_of(&path)?;
+      let path_info = store.get_path_info(&spath).await?;
+      assert!(path_info.is_some());
+
+      let refs = store.get_referrers(&spath).await?;
+      assert!(!refs.is_empty());
+
+      Ok(())
+    })
+  }
 }

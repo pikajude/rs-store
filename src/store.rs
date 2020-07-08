@@ -1,10 +1,13 @@
 use crate::{
   error::*,
   hash::{Encoding, Hash, HashType},
-  path::Path as StorePath,
-  path_info::PathInfo,
+  path::{Path as StorePath, PathSet},
+  path_info::{PathInfo, ValidPathInfo},
 };
+use bytes::Bytes;
+use futures::Stream;
 use std::{
+  borrow::Cow,
   path::{Path, PathBuf},
   sync::Arc,
 };
@@ -12,9 +15,14 @@ use std::{
 pub mod cached;
 pub mod local;
 
+/// A Nix store, containing a lot of filepaths.
+///
+/// This store might be read-only, as in the case of a binary cache store or S3
+/// bucket store. It may also be read-write, as in the case of a local
+/// filestystem store or an SSH store.
 #[async_trait]
-pub trait Store {
-  fn store_path(&self) -> &Path;
+pub trait Store: Send + Sync {
+  fn store_path(&self) -> Cow<Path>;
   fn get_uri(&self) -> String;
 
   /// Convert some path to a store path, if it's a *direct* descendant of the
@@ -23,7 +31,7 @@ pub trait Store {
   /// For arbitrarily deep descendants of a store directory, try
   /// `store_path_of`.
   fn parse_store_path(&self, path: &Path) -> Result<StorePath> {
-    StorePath::new(path, self.store_path())
+    StorePath::new(path, self.store_path().as_ref())
   }
 
   /// If a Nix store path is a parent of `path`, return it. Unlike
@@ -175,5 +183,21 @@ pub trait Store {
     ))
   }
 
+  /// Get info about a valid path. If this method returns `None`, the path is
+  /// known not to exist in the store.
   async fn get_path_info(&self, path: &StorePath) -> Result<Option<Arc<dyn PathInfo>>>;
+
+  async fn get_referrers(&self, path: &StorePath) -> Result<PathSet>;
+
+  async fn is_valid_path(&self, path: &StorePath) -> Result<bool> {
+    self.get_path_info(path).await.map(|x| x.is_some())
+  }
+
+  async fn add_to_store<S: Stream<Item = Result<Bytes>> + Send + Unpin>(
+    &self,
+    info: &ValidPathInfo,
+    source: S,
+  ) -> Result<()>;
+
+  async fn add_temp_root(&self, path: &StorePath) -> Result<()>;
 }

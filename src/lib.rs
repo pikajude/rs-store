@@ -1,7 +1,7 @@
 #![feature(trait_alias)]
 
 #[macro_use] extern crate async_trait;
-#[macro_use] extern crate static_assertions;
+#[macro_use] extern crate log;
 
 pub mod archive;
 pub mod base32;

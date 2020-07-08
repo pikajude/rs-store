@@ -33,9 +33,8 @@ impl Sink<ArchiveData> for HashSink {
       ArchiveData::Tag(s) => self.0.input(s.as_bytes()),
       ArchiveData::Int(i) => {
         let mut buf = [0u8; 8];
-        #[allow(clippy::needless_range_loop)] // easiest way to write this
-        for ix in 0..8 {
-          buf[ix] = (i >> (8 * ix)) as u8;
+        for (ix, byte) in buf.iter_mut().enumerate() {
+          *byte = (i >> (8 * ix)) as u8;
         }
         self.0.input(&buf);
       }
