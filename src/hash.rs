@@ -1,7 +1,8 @@
-use crate::util;
+use crate::{store::ByteStream, util};
 use anyhow::Result;
 use crypto::digest::Digest;
 use derive_more::Display;
+use futures::stream::StreamExt;
 use std::{
   borrow::Cow,
   fmt::{self, Debug},
@@ -9,12 +10,13 @@ use std::{
   path::Path,
   str::FromStr,
 };
-use tokio::io::{AsyncRead, AsyncReadExt};
 
 mod context;
 mod sink;
 
+use bytes::Bytes;
 pub use context::Context;
+use futures::Stream;
 pub use sink::HashSink as Sink;
 
 #[derive(Debug, thiserror::Error)]
@@ -183,26 +185,22 @@ impl Hash {
   pub fn hash_bytes(data: &[u8], ty: HashType) -> Self {
     let mut ctx = Context::new(ty);
     ctx.input(data);
-    ctx.into()
+    ctx.finish().0
   }
 
-  pub async fn hash_file<P: AsRef<Path>>(path: P, ty: HashType) -> Result<Self> {
+  pub async fn hash_file<P: AsRef<Path>>(path: P, ty: HashType) -> Result<(Self, usize)> {
     let path = path.as_ref();
-    Self::hash(&mut crate::util::open_file(path).await?, ty).await
+    Self::hash(&mut crate::util::stream_file(path).await?, ty).await
   }
 
   /// Hash the contents of an arbitrary byte stream.
-  pub async fn hash<R: AsyncRead + Unpin>(r: &mut R, ty: HashType) -> Result<Self> {
+  pub async fn hash<R: ByteStream + Unpin>(r: &mut R, ty: HashType) -> Result<(Self, usize)> {
     let mut ctx = Context::new(ty);
-    loop {
-      let mut buf = [0; 8192];
-      if r.read(&mut buf).await? == 0 {
-        break;
-      }
-      ctx.input(&buf);
+    while let Some(bytes) = r.next().await {
+      ctx.input(&bytes?);
     }
 
-    Ok(ctx.into())
+    Ok(ctx.finish())
   }
 
   /// Convert `self` to a shorter hash by recursively XOR-ing bytes.

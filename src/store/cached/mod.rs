@@ -1,4 +1,6 @@
+use super::ByteStream;
 use crate::{
+  archive::PathFilter,
   path::Path as StorePath,
   path_info::{PathInfo, ValidPathInfo},
   Store,
@@ -85,7 +87,7 @@ impl<S: Store> Store for Cached<S> {
     self.store.add_temp_root(path).await
   }
 
-  async fn add_nar_to_store<I: Stream<Item = Result<Bytes>> + Send + Unpin>(
+  async fn add_nar_to_store<I: ByteStream + Send + Unpin>(
     &self,
     info: &ValidPathInfo,
     source: I,
@@ -93,14 +95,14 @@ impl<S: Store> Store for Cached<S> {
     self.store.add_nar_to_store(info, source).await
   }
 
-  async fn add_path_to_store<F: FnMut(&Path) -> bool + Send>(
+  async fn add_path_to_store(
     &self,
     name: &str,
     path: &Path,
     algo: crate::hash::HashType,
-    filter: F,
+    filter: PathFilter,
     repair: bool,
-  ) -> Result<()> {
+  ) -> Result<StorePath> {
     self
       .store
       .add_path_to_store(name, path, algo, filter, repair)

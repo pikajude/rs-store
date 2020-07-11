@@ -1,4 +1,4 @@
-#![feature(trait_alias)]
+#![feature(trait_alias, fn_traits, unboxed_closures)]
 
 #[macro_use] extern crate async_trait;
 #[macro_use] extern crate log;

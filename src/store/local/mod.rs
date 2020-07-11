@@ -1,21 +1,33 @@
+use super::ByteStream;
 use crate::{
-  hash::Hash,
+  archive::{ArchiveSink, PathFilter},
+  hash::{self, Encoding, Hash, HashType, Sink},
   path::Path as StorePath,
   path_info::{PathInfo, ValidPathInfo},
   Store,
 };
 use anyhow::{Context as _, Result};
 use bytes::Bytes;
+use crypto::digest::Digest;
 use db::Db;
 use dirs::Dirs;
 use futures::{lock::Mutex, Stream, TryStreamExt};
-use gc::{FsExt2, LockType};
-use std::{borrow::Cow, collections::BTreeSet, iter, path::Path, process, sync::Arc};
+use lock::{FsExt2, LockType, PathLocks};
+use std::{
+  borrow::Cow,
+  collections::BTreeSet,
+  iter,
+  path::{Path, PathBuf},
+  process,
+  sync::Arc,
+  time::SystemTime,
+};
 use tokio::{fs, io::AsyncWriteExt};
 
 mod db;
 mod dirs;
 mod gc;
+mod lock;
 
 pub struct LocalStore {
   dirs: Dirs,
@@ -74,10 +86,10 @@ impl Store for LocalStore {
     Ok(())
   }
 
-  async fn add_nar_to_store<S: Stream<Item = Result<Bytes>> + Send + Unpin>(
+  async fn add_nar_to_store<S: ByteStream + Send + Unpin>(
     &self,
     info: &ValidPathInfo,
-    mut source: S,
+    source: S,
   ) -> Result<()> {
     self
       .add_temp_root(&info.store_path)
@@ -88,27 +100,99 @@ impl Store for LocalStore {
           info.store_path
         )
       })?;
-    while let Some(bytes) = source.try_next().await? {
-      eprintln!("{:?}", bytes);
+    if !self.is_valid_path(&info.store_path).await? {
+      let mut locks = PathLocks::new();
+      let real_path = self
+        .store_path()
+        .join(PathBuf::from(info.store_path.to_string()));
+
+      locks.lock(Some(real_path.clone()), false, None).await?;
+
+      if !self.is_valid_path(&info.store_path).await? {
+        let _ = fs::remove_file(&real_path).await;
+
+        let mut hash_sink = hash::Context::new(HashType::SHA256);
+
+        let wrapped_source = source.and_then(|bytes| {
+          hash_sink.input(&bytes);
+          futures::future::ok(bytes)
+        });
+
+        crate::archive::restore_into(&real_path, wrapped_source).await?;
+
+        let (hash, hash_len) = hash_sink.finish();
+
+        if hash != info.nar_hash {
+          todo!("hash mismatch");
+        }
+        if hash_len != info.nar_size.unwrap_or_default() as usize {
+          todo!("path size mismatch");
+        }
+
+        // self.auto_gc().await?;
+        // self.canonicalise(&real_path).await?;
+        // self.optimise(&real_path).await?;
+
+        self.db.lock().await.insert_valid_paths(self, Some(info))?;
+      }
     }
     Ok(())
-    // todo!()
   }
 
-  async fn add_path_to_store<F: FnMut(&Path) -> bool + Send>(
+  async fn add_path_to_store(
     &self,
     name: &str,
     path: &Path,
-    algo: crate::hash::HashType,
-    filter: F,
-    repair: bool,
-  ) -> Result<()> {
+    algo: HashType,
+    filter: PathFilter,
+    _repair: bool,
+  ) -> Result<StorePath> {
     let fpath = fs::canonicalize(path).await?;
-    let mut file = fs::File::open(&fpath).await?;
-    let contents_hash = Hash::hash(&mut file, algo).await?;
-    let dest = self.make_fixed_output_path(true, &contents_hash, name, iter::empty(), false)?;
+    let meta = fs::metadata(&fpath).await?;
+    let (contents_hash, _) = Hash::hash_file(&fpath, algo).await?;
+    let dest =
+      self.make_fixed_output_path(meta.is_dir(), &contents_hash, name, iter::empty(), false)?;
     self.add_temp_root(&dest).await?;
-    todo!()
+    if !self.is_valid_path(&dest).await? {
+      let real_path = self.store_path().join(PathBuf::from(dest.to_string()));
+      let _ = fs::remove_file(&real_path).await;
+      if meta.is_dir() {
+        unimplemented!("recursive add not yet supported");
+      } else {
+        fs::copy(&fpath, &real_path).await.with_context(|| {
+          format!(
+            "while copying contents from {} to {}",
+            fpath.display(),
+            real_path.display()
+          )
+        })?;
+      }
+
+      // self.canonicalise_path(&real_path).await?;
+
+      let mut h = ArchiveSink::new(crate::hash::Sink::new(algo));
+      crate::archive::dump_path(&real_path, &mut h, &filter).await?;
+      let (hash, size) = h.into_inner().finish();
+      trace!("{:?}", hash);
+
+      // self.optimise_path(&real_path).await?;
+
+      let vpi = ValidPathInfo {
+        store_path: dest.clone(),
+        deriver: None,
+        nar_hash: hash,
+        references: Default::default(),
+        registration_time: SystemTime::now(),
+        nar_size: Some(size as u64),
+        id: 0,
+        signatures: Default::default(),
+        content_addressed: Default::default(),
+        ultimate: true,
+      };
+
+      self.db.lock().await.insert_valid_paths(self, Some(&vpi))?;
+    }
+    Ok(dest)
   }
 }
 
@@ -116,7 +200,7 @@ impl LocalStore {
   pub fn open(root: &Path) -> Result<Self> {
     let dirs = Dirs::new(root)?;
     Ok(Self {
-      db: Mutex::new(Db::open(&dirs.db_dir().join("db.sqlite"))?),
+      db: Mutex::new(Db::open(&dirs.db_dir().join("db.sqlite"), true)?),
       dirs,
     })
   }
@@ -125,45 +209,63 @@ impl LocalStore {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::hash::{Hash, HashType};
-  use std::{mem::ManuallyDrop, time::SystemTime};
+  use crate::hash::HashType;
+  use async_compression::stream::LzmaDecoder;
+  use std::mem::ManuallyDrop;
+
+  fn get_local_store() -> anyhow::Result<LocalStore> {
+    let temp = ManuallyDrop::new(tempfile::tempdir()?);
+    LocalStore::open(temp.as_ref())
+  }
 
   #[test]
-  fn test_local_store() -> anyhow::Result<()> {
+  fn direct_add_path() -> anyhow::Result<()> {
     crate::util::run_test(async {
-      let temp = ManuallyDrop::new(tempfile::tempdir()?);
-      let store = LocalStore::open(temp.as_ref())?;
-      store
-        .add_nar_to_store(
-          &ValidPathInfo {
-            store_path: store.parse_store_path(
-              &temp
-                .as_ref()
-                .join("store/83gajmmszj7827d54kjvk0dg8vpxspq6-nix-2.4"),
-            )?,
-            deriver: None,
-            nar_hash: Hash::hash_bytes(b"foobar", HashType::SHA256),
-            references: Default::default(),
-            registration_time: SystemTime::now(),
-            nar_size: None,
-            id: 0,
-            signatures: Default::default(),
-            content_addressed: None,
-          },
-          crate::util::stream_file(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml")).await?,
+      let store = get_local_store()?;
+      let spath = store
+        .add_path_to_store(
+          "Cargo.toml",
+          Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml")),
+          HashType::SHA256,
+          PathFilter::always(),
+          false,
         )
         .await?;
-      let path = temp
-        .as_ref()
-        .join("store/83gajmmszj7827d54kjvk0dg8vpxspq6-nix-2.4/bin/nix");
-      let spath = store.store_path_of(&path)?;
       let path_info = store.get_path_info(&spath).await?;
       assert!(path_info.is_some());
 
-      let refs = store.get_referrers(&spath).await?;
-      assert!(!refs.is_empty());
+      Ok(())
+    })
+  }
 
-      let _ = ManuallyDrop::into_inner(temp);
+  #[test]
+  fn add_nar() -> anyhow::Result<()> {
+    crate::util::run_test(async {
+      let store = get_local_store()?;
+      let nar_stream = LzmaDecoder::new(
+        crate::util::stream_file(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/disnix.nar.xz"))
+          .await?,
+      );
+
+      store
+        .add_nar_to_store(
+          &ValidPathInfo {
+            id: 0,
+            store_path: StorePath::from_base_name(
+              "mabn5yhm39lr6kaqfp1b98sd4b8qr5cg-DisnixWebService-0.8",
+            )?,
+            deriver: None,
+            nar_hash: Hash::hash_bytes(b"", HashType::SHA256),
+            references: Default::default(),
+            registration_time: SystemTime::now(),
+            nar_size: Some(1234),
+            signatures: Default::default(),
+            content_addressed: Default::default(),
+            ultimate: false,
+          },
+          nar_stream,
+        )
+        .await?;
 
       Ok(())
     })

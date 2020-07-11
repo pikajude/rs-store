@@ -16,6 +16,7 @@ pub struct ValidPathInfo {
   pub id: u64,
   pub signatures: BTreeSet<String>,
   pub content_addressed: Option<String>,
+  pub ultimate: bool,
 }
 
 impl PartialEq for ValidPathInfo {

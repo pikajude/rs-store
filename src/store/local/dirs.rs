@@ -1,14 +1,18 @@
 use anyhow::Result;
 use once_cell::sync::OnceCell;
-use std::path::{Path, PathBuf};
+use std::{
+  fs,
+  path::{Path, PathBuf},
+};
 
 pub struct Dirs(PathBuf);
 
 impl Dirs {
   pub fn new<P: AsRef<Path>>(root: P) -> Result<Self> {
     let s = Self(root.as_ref().into());
-    std::fs::create_dir_all(s.temproots_dir())?;
-    std::fs::create_dir_all(s.db_dir())?;
+    fs::create_dir_all(s.temproots_dir())?;
+    fs::create_dir_all(s.db_dir())?;
+    fs::create_dir_all(s.store_dir())?;
     Ok(s)
   }
 

@@ -4,6 +4,7 @@ use crypto::digest::Digest;
 pub struct Context {
   ty: HashType,
   buf: Buf,
+  len: usize,
 }
 
 enum Buf {
@@ -34,7 +35,8 @@ macro_rules! do_impl {
 
 impl Digest for Context {
   fn input(&mut self, input: &[u8]) {
-    do_impl!(mut self, input(input))
+    do_impl!(mut self, input(input));
+    self.len += input.len();
   }
 
   fn result(&mut self, out: &mut [u8]) {
@@ -42,7 +44,8 @@ impl Digest for Context {
   }
 
   fn reset(&mut self) {
-    do_impl!(mut self, reset())
+    do_impl!(mut self, reset());
+    self.len = 0;
   }
 
   fn output_bits(&self) -> usize {
@@ -64,18 +67,22 @@ impl Context {
         HashType::SHA256 => Buf::Sha256(crypto::sha2::Sha256::new()),
         HashType::SHA512 => Buf::Sha512(crypto::sha2::Sha512::new()),
       },
+      len: 0,
     }
   }
 }
 
-impl From<Context> for Hash {
-  fn from(mut c: Context) -> Self {
+impl Context {
+  pub fn finish(mut self) -> (Hash, usize) {
     let mut bytes = [0; 64];
-    c.result(&mut bytes);
-    Self {
-      ty: c.ty,
-      len: c.ty.size(),
-      data: bytes,
-    }
+    self.result(&mut bytes);
+    (
+      Hash {
+        ty: self.ty,
+        len: self.ty.size(),
+        data: bytes,
+      },
+      self.len,
+    )
   }
 }

@@ -1,7 +1,10 @@
 use anyhow::Result;
 use bytes::Bytes;
 use futures::{stream::TryStreamExt, Stream};
-use std::path::{Path, PathBuf};
+use std::{
+  io,
+  path::{Path, PathBuf},
+};
 use tokio::fs::File;
 use tokio_util::codec::{BytesCodec, FramedRead};
 
@@ -10,14 +13,9 @@ pub async fn open_file<P: AsRef<Path>>(path: P) -> Result<File> {
   Ok(File::open(path).await?)
 }
 
-pub async fn stream_file<P: AsRef<Path>>(path: P) -> Result<impl Stream<Item = Result<Bytes>>> {
+pub async fn stream_file<P: AsRef<Path>>(path: P) -> Result<impl Stream<Item = io::Result<Bytes>>> {
   let buf: PathBuf = path.as_ref().into();
-  let f = open_file(&buf).await?;
-  Ok(
-    FramedRead::new(f, BytesCodec::new())
-      .map_ok(|b| b.freeze())
-      .map_err(|e| e.into()),
-  )
+  Ok(FramedRead::new(open_file(&buf).await?, BytesCodec::new()).map_ok(|b| b.freeze()))
 }
 
 pub fn break_str(s: &str, pattern: char) -> Option<(&str, &str)> {
@@ -35,8 +33,8 @@ fn test_break() {
 
 #[cfg(test)]
 pub fn run_test<F: futures::Future<Output = anyhow::Result<()>>>(test: F) -> anyhow::Result<()> {
-  pretty_env_logger::formatted_builder()
-    .filter_level(log::LevelFilter::Trace)
-    .init();
+  let _ = pretty_env_logger::formatted_builder()
+    .filter_module("nix_store", log::LevelFilter::Trace)
+    .try_init();
   tokio::runtime::Runtime::new().unwrap().block_on(test)
 }

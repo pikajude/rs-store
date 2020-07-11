@@ -1,4 +1,5 @@
 use crate::{
+  archive::{ArchiveSink, PathFilter},
   hash::{Encoding, Hash, HashType},
   path::{Path as StorePath, PathSet},
   path_info::{PathInfo, ValidPathInfo},
@@ -14,6 +15,8 @@ use std::{
 
 pub mod cached;
 pub mod local;
+
+pub trait ByteStream = Stream<Item = std::io::Result<Bytes>>;
 
 /// A Nix store, containing a lot of filepaths.
 ///
@@ -160,23 +163,23 @@ pub trait Store: Send + Sync {
     path: &Path,
     algorithm: HashType,
   ) -> Result<(StorePath, Hash)> {
-    let file_hash = Hash::hash_file(path, algorithm).await?;
+    let (file_hash, _) = Hash::hash_file(path, algorithm).await?;
     Ok((
       self.make_fixed_output_path(false, &file_hash, name, std::iter::empty(), false)?,
       file_hash,
     ))
   }
 
-  async fn store_path_for_dir<F: FnMut(&Path) -> bool + Send>(
+  async fn store_path_for_dir(
     &self,
     name: &str,
     path: &Path,
     algo: HashType,
-    filter: F,
+    filter: PathFilter,
   ) -> Result<(StorePath, Hash)> {
-    let mut h = crate::hash::Sink::new(algo);
-    crate::archive::dump_path(path, &mut h, filter).await?;
-    let hash = h.finish();
+    let mut h = ArchiveSink::new(crate::hash::Sink::new(algo));
+    crate::archive::dump_path(path, &mut h, &filter).await?;
+    let (hash, _) = h.into_inner().finish();
     Ok((
       self.make_fixed_output_path(true, &hash, name, std::iter::empty(), false)?,
       hash,
@@ -193,20 +196,20 @@ pub trait Store: Send + Sync {
     self.get_path_info(path).await.map(|x| x.is_some())
   }
 
-  async fn add_nar_to_store<S: Stream<Item = Result<Bytes>> + Send + Unpin>(
+  async fn add_nar_to_store<S: ByteStream + Send + Unpin>(
     &self,
     info: &ValidPathInfo,
     source: S,
   ) -> Result<()>;
 
-  async fn add_path_to_store<F: FnMut(&Path) -> bool + Send>(
+  async fn add_path_to_store(
     &self,
     name: &str,
     path: &Path,
     algo: HashType,
-    filter: F,
+    filter: PathFilter,
     repair: bool,
-  ) -> Result<()>;
+  ) -> Result<StorePath>;
 
   async fn add_temp_root(&self, path: &StorePath) -> Result<()>;
 }
