@@ -44,7 +44,9 @@ pub trait ParseSink {
   async fn create_file(&mut self, path: Option<&Path>) -> Result<()>;
   async fn create_symlink(&mut self, path: Option<&Path>, target: PathBuf) -> Result<()>;
   async fn set_executable(&mut self) -> Result<()>;
-  async fn allocate_contents(&mut self, size: usize) -> Result<()>;
+  async fn allocate_contents(&mut self, _: usize) -> Result<()> {
+    Ok(())
+  }
   async fn receive_contents<S: AsyncRead + Send + Unpin>(&mut self, bytes: S) -> Result<()>;
 }
 
@@ -248,7 +250,7 @@ impl ParseSink for RestoreSink {
     Ok(())
   }
 
-  async fn create_symlink(&mut self, path: Option<&Path>, target: PathBuf) -> Result<()> {
+  async fn create_symlink(&mut self, _: Option<&Path>, _: PathBuf) -> Result<()> {
     todo!()
   }
 
@@ -263,16 +265,8 @@ impl ParseSink for RestoreSink {
     Ok(())
   }
 
+  #[cfg(target_os = "linux")]
   async fn allocate_contents(&mut self, size: usize) -> Result<()> {
-    // copied block from nix crate src
-    #[cfg(any(
-      target_os = "linux",
-      target_os = "android",
-      target_os = "emscripten",
-      target_os = "fuchsia",
-      any(target_os = "wasi", target_env = "wasi"),
-      target_os = "freebsd"
-    ))]
     nix::fcntl::posix_fallocate(self.file()?.as_raw_fd(), 0, size as i64)?;
     Ok(())
   }

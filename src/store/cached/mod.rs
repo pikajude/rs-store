@@ -26,16 +26,16 @@ pub struct Cached<S> {
 }
 
 impl<S> Cached<S> {
-  pub fn new(store: S, use_disk_cache: bool) -> Self {
-    Self {
+  pub async fn new(store: S, use_disk_cache: bool) -> Result<Self> {
+    Ok(Self {
       store,
       cache: Mutex::new(LruCache::new(8192)),
       disk_cache: if use_disk_cache {
-        Some(DiskCache::new())
+        Some(DiskCache::open().await?)
       } else {
         None
       },
-    }
+    })
   }
 }
 
@@ -52,6 +52,7 @@ impl<S: Store> Store for Cached<S> {
   async fn get_path_info(&self, path: &StorePath) -> Result<Option<Arc<dyn PathInfo>>> {
     let mut cache = self.cache.lock().await;
     let path_key = self.print_store_path(path);
+    let hash_part = path.hash.to_string();
 
     // two layers of options, None means cache miss, Some(None) means nonexistent
     // path
@@ -60,7 +61,7 @@ impl<S: Store> Store for Cached<S> {
     }
 
     if let Some(dc) = &self.disk_cache {
-      match dc.lookup_nar(&self.get_uri(), "").await? {
+      match dc.lookup_nar(&self.get_uri(), &hash_part).await? {
         CacheEntry::Valid(x) => {
           cache.insert(path_key.into(), Some(x.clone()));
           return Ok(Some(x));
@@ -74,6 +75,9 @@ impl<S: Store> Store for Cached<S> {
     }
 
     let new_data = self.store.get_path_info(path).await?;
+    if let Some(dc) = &self.disk_cache {
+      dc.insert(&self.get_uri(), &hash_part, new_data.clone());
+    }
     cache.insert(path_key.into(), new_data.clone());
     Ok(new_data)
   }

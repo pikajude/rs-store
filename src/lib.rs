@@ -9,6 +9,7 @@ pub mod hash;
 pub mod path;
 pub mod path_info;
 mod prelude;
+pub mod sqlite;
 pub mod store;
 pub mod util;
 

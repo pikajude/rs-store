@@ -121,7 +121,7 @@ where
   if meta.file_type().is_file() {
     sink.write_str("type").await?;
     sink.write_str("regular").await?;
-    if Mode::from_bits_truncate(meta.mode()).contains(Mode::S_IXUSR) {
+    if Mode::from_bits_truncate(meta.mode().try_into()?).contains(Mode::S_IXUSR) {
       sink.write_str("executable").await?;
       sink.write_str("").await?;
     }
@@ -131,7 +131,8 @@ where
     sink.write_str("type").await?;
     sink.write_str("directory").await?;
 
-    while let Some(file) = fs::read_dir(path).await?.next_entry().await? {
+    let mut reader = fs::read_dir(path).await?;
+    while let Some(file) = reader.next_entry().await? {
       if filter(&file.path()) {
         sink.write_str("entry").await?;
         sink.write_str("(").await?;

@@ -1,3 +1,4 @@
+use self::dirs::Dirs;
 use super::ByteStream;
 use crate::{
   archive::{ArchiveSink, PathFilter},
@@ -9,13 +10,16 @@ use crate::{
 };
 use crypto::digest::Digest;
 use db::Db;
-use dirs::Dirs;
 use error::Error;
 use futures::{lock::Mutex, TryStreamExt};
 use lock::{FsExt2, LockType, PathLocks};
+use nix::{
+  sys::{stat::*, time::TimeSpec},
+  unistd::{fchownat, getegid, geteuid, getuid, FchownatFlags},
+};
 use std::{
   borrow::Cow,
-  collections::BTreeSet,
+  collections::{BTreeSet, HashSet},
   iter,
   path::{Path, PathBuf},
   process,
@@ -142,7 +146,9 @@ impl Store for LocalStore {
         }
 
         // self.auto_gc().await?;
-        // self.canonicalise(&real_path).await?;
+
+        self.canonicalise_path_metadata(&real_path, None).await?;
+
         // self.optimise(&real_path).await?;
 
         self.db.lock().await.insert_valid_paths(self, Some(info))?;
@@ -180,7 +186,7 @@ impl Store for LocalStore {
         })?;
       }
 
-      // self.canonicalise_path(&real_path).await?;
+      self.canonicalise_path_metadata(&real_path, None).await?;
 
       let mut h = ArchiveSink::new(crate::hash::Sink::new(algo));
       crate::archive::dump_path(&real_path, &mut h, &filter).await?;
@@ -214,13 +220,14 @@ impl LocalStore {
       db: Mutex::new(Db::open(&dirs.db_dir().join("db.sqlite"), true)?),
       dirs,
     };
+    #[cfg(target_os = "linux")]
     this.make_store_writable()?;
     Ok(this)
   }
 
   #[cfg(target_os = "linux")]
   fn make_store_writable(&self) -> Result<()> {
-    use nix::{mount::*, sched::*, sys::statvfs::*, unistd::getuid};
+    use nix::{mount::*, sched::*, sys::statvfs::*};
 
     if !getuid().is_root() {
       return Ok(());
@@ -247,8 +254,194 @@ impl LocalStore {
     Ok(())
   }
 
-  #[cfg(not(target_os = "linux"))]
-  fn make_store_writable(&self) -> Result<()> {}
+  async fn canonicalise_path_metadata<P: AsRef<Path> + Send>(
+    &self,
+    path: P,
+    uid: Option<libc::uid_t>,
+  ) -> Result<()> {
+    self
+      .canonicalise_path_metadata_impl(path, uid, &mut HashSet::new())
+      .await
+  }
+
+  #[async_recursion]
+  async fn canonicalise_path_metadata_impl<P: AsRef<Path> + Send>(
+    &self,
+    path: P,
+    uid: Option<libc::uid_t>,
+    inodes: &mut HashSet<Inode>,
+  ) -> Result<()> {
+    use nix::errno::*;
+    use std::ffi::CString;
+
+    let path = path.as_ref();
+    let path_str = CString::new(path.to_string_lossy().into_owned())?;
+
+    #[cfg(target_os = "macos")]
+    {
+      extern "C" {
+        fn lchflags(path: *const libc::c_char, flags: libc::c_ulong) -> libc::c_int;
+      }
+
+      if unsafe { lchflags(path_str.as_ptr(), 0) } != 0 {
+        if errno() != libc::ENOTSUP {
+          bail!(std::io::Error::last_os_error());
+        }
+      }
+    }
+
+    let info = lstat(path)?;
+    if !(s_isreg(info.st_mode) || s_isdir(info.st_mode) || s_islnk(info.st_mode)) {
+      bail!("file `{}' has an unsupported type", path.display());
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+      extern "C" {
+        fn llistxattr(
+          path: *const libc::c_char,
+          list: *mut libc::c_char,
+          size: libc::size_t,
+        ) -> libc::ssize_t;
+        fn lremovexattr(path: *const libc::c_char, name: *const libc::c_char) -> libc::c_int;
+      }
+
+      use std::cmp::Ordering;
+
+      let attrsize = unsafe { llistxattr(path_str.as_ptr(), std::ptr::null_mut(), 0) };
+      match attrsize.cmp(&0) {
+        Ordering::Less => {
+          if errno() != libc::ENOTSUP && errno() != libc::ENODATA {
+            bail!("querying extended attributes of `{}'", path.display());
+          }
+        }
+        Ordering::Greater => {
+          let mut attrbuf = vec![0u8; attrsize as usize];
+          unsafe {
+            llistxattr(
+              path_str.as_ptr(),
+              attrbuf.as_mut_ptr() as *mut _,
+              attrbuf.len(),
+            )
+          };
+          for attr_name in attrbuf.split(|x| *x == 0) {
+            if attr_name == b"security.selinux" {
+              continue;
+            }
+            if unsafe { lremovexattr(path_str.as_ptr(), attr_name.as_ptr() as *const _) } == -1 {
+              bail!(
+                "removing extended attribute `{}' from `{}'",
+                String::from_utf8_lossy(attr_name),
+                path.display()
+              );
+            }
+          }
+        }
+        _ => {}
+      }
+    }
+
+    if uid.map_or(false, |x| x != info.st_uid) {
+      assert!(!s_isdir(info.st_mode));
+      if !inodes.contains(&Inode {
+        dev: info.st_dev,
+        ino: info.st_ino,
+      }) {
+        bail!("invalid ownership on file `{}'", path.display());
+      }
+
+      let mode = info.st_mode & !libc::S_IFMT;
+      assert!(
+        s_islnk(mode)
+          || (info.st_uid == getuid().as_raw()
+            && (mode == 0o444 || mode == 0o555)
+            && info.st_mtime == 1)
+      );
+    }
+
+    inodes.insert(Inode {
+      dev: info.st_dev,
+      ino: info.st_ino,
+    });
+
+    self.canonicalize_timestamp_and_permissions(path, info)?;
+
+    if info.st_uid != geteuid().as_raw() {
+      fchownat(
+        None,
+        path,
+        Some(geteuid()),
+        Some(getegid()),
+        FchownatFlags::NoFollowSymlink,
+      )
+      .with_context(|| format!("while changing ownership of path `{}'", path.display()))?;
+    }
+
+    if s_isdir(info.st_mode) {
+      let mut dir = fs::read_dir(path).await?;
+      while let Some(entry) = dir.next_entry().await? {
+        self
+          .canonicalise_path_metadata_impl(entry.path(), uid, inodes)
+          .await?;
+      }
+    }
+
+    Ok(())
+  }
+
+  fn canonicalize_timestamp_and_permissions<P: AsRef<Path>>(
+    &self,
+    path: P,
+    info: FileStat,
+  ) -> Result<()> {
+    if !s_islnk(info.st_mode) {
+      let mut mode = info.st_mode & !libc::S_IFMT;
+      if mode != 0o444 && mode != 0o555 {
+        mode = (info.st_mode & libc::S_IFMT)
+          | 0o444
+          | (if info.st_mode & libc::S_IXUSR > 0 {
+            0o111
+          } else {
+            0
+          });
+        fchmodat(
+          None,
+          path.as_ref(),
+          Mode::from_bits_truncate(mode),
+          FchmodatFlags::FollowSymlink,
+        )?;
+      }
+    }
+
+    if info.st_mtime != 1 {
+      use nix::sys::time::TimeValLike;
+      utimensat(
+        None,
+        path.as_ref(),
+        &TimeSpec::seconds(info.st_atime),
+        &TimeSpec::seconds(1),
+        UtimensatFlags::NoFollowSymlink,
+      )?;
+    }
+
+    Ok(())
+  }
+}
+
+fn s_isreg(mode: mode_t) -> bool {
+  (mode & SFlag::S_IFMT.bits()) == SFlag::S_IFREG.bits()
+}
+fn s_isdir(mode: mode_t) -> bool {
+  (mode & SFlag::S_IFMT.bits()) == SFlag::S_IFDIR.bits()
+}
+fn s_islnk(mode: mode_t) -> bool {
+  (mode & SFlag::S_IFMT.bits()) == SFlag::S_IFLNK.bits()
+}
+
+#[derive(Eq, PartialEq, Hash)]
+struct Inode {
+  dev: libc::dev_t,
+  ino: libc::ino_t,
 }
 
 #[cfg(test)]
