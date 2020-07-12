@@ -6,9 +6,8 @@ use crate::{
   Store,
 };
 use anyhow::Result;
-use bytes::Bytes;
 use disk::{CacheEntry, DiskCache};
-use futures::{lock::Mutex, Stream};
+use futures::lock::Mutex;
 use lru_cache::LruCache;
 use std::{
   borrow::Cow,

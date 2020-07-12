@@ -1,4 +1,4 @@
-use crate::base32;
+use crate::{base32, prelude::*};
 use anyhow::Result;
 use derive_more::{Deref, Display};
 use std::{
@@ -35,7 +35,7 @@ pub struct Path {
 impl Path {
   pub fn new(p: &StdPath, store_dir: &StdPath) -> Result<Self> {
     if p.parent() != Some(store_dir) {
-      return Err(Error::NotInStore(p.into()).into());
+      bail!(Error::NotInStore(p.into()));
     }
 
     Self::from_base_name(
@@ -59,7 +59,7 @@ impl Path {
 
   pub fn from_base_name(base_name: &str) -> Result<Self> {
     if base_name.len() < HASH_CHARS + 1 || base_name.as_bytes()[HASH_CHARS] != b'-' {
-      return Err(Error::InvalidFilepath(base_name.into()).into());
+      bail!(Error::InvalidFilepath(base_name.into()));
     }
 
     Ok(Path {

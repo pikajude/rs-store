@@ -3,10 +3,8 @@ use crate::{
   hash::{Encoding, Hash, HashType},
   path::{Path as StorePath, PathSet},
   path_info::{PathInfo, ValidPathInfo},
+  prelude::*,
 };
-use anyhow::Result;
-use bytes::Bytes;
-use futures::Stream;
 use std::{
   borrow::Cow,
   path::{Path, PathBuf},
@@ -15,8 +13,6 @@ use std::{
 
 pub mod cached;
 pub mod local;
-
-pub trait ByteStream = Stream<Item = std::io::Result<Bytes>>;
 
 /// A Nix store, containing a lot of filepaths.
 ///
@@ -43,7 +39,7 @@ pub trait Store: Send + Sync {
   fn store_path_of(&self, path: &Path) -> Result<StorePath> {
     let p = path.canonicalize()?;
     if !p.starts_with(self.store_path()) {
-      return Err(crate::path::Error::NotInStore(p).into());
+      bail!(crate::path::Error::NotInStore(p));
     }
     self.parse_store_path(
       &p.components()

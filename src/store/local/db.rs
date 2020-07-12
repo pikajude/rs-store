@@ -2,10 +2,10 @@ use crate::{
   hash::{Encoding, Hash},
   path::{Path as StorePath, PathSet},
   path_info::ValidPathInfo,
+  prelude::*,
   Store,
 };
-use anyhow::{Context, Result};
-use rusqlite::{named_params, params, Connection, DatabaseName};
+use rusqlite::{Connection, DatabaseName};
 use std::{
   collections::BTreeSet,
   convert::TryInto,
@@ -31,7 +31,8 @@ pub struct Db(Connection);
 
 impl Db {
   pub fn open(path: &Path, create: bool) -> Result<Self> {
-    let mut conn = Connection::open(path).context("while trying to open database file")?;
+    debug!("opening connection to sqlite DB at {}", path.display());
+    let mut conn = Connection::open(path)?;
     if log_enabled!(log::Level::Trace) {
       conn.trace(Some(|x| trace!("{}", x)));
     }
@@ -131,6 +132,8 @@ impl Db {
           ":ca": ""
         },
       )?;
+      let row_id = txn.last_insert_rowid();
+      debug!("inserted new row: {:?}", row_id);
     }
     txn.commit()?;
     Ok(())

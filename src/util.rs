@@ -33,8 +33,12 @@ fn test_break() {
 
 #[cfg(test)]
 pub fn run_test<F: futures::Future<Output = anyhow::Result<()>>>(test: F) -> anyhow::Result<()> {
-  let _ = pretty_env_logger::formatted_builder()
-    .filter_module("nix_store", log::LevelFilter::Trace)
-    .try_init();
+  if std::env::var_os("RUST_LOG").is_some() {
+    let _ = pretty_env_logger::try_init();
+  } else {
+    let _ = pretty_env_logger::formatted_builder()
+      .filter_module("nix_store", log::LevelFilter::Trace)
+      .try_init();
+  }
   tokio::runtime::Runtime::new().unwrap().block_on(test)
 }

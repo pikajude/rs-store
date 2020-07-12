@@ -1,5 +1,4 @@
 use anyhow::Result;
-use once_cell::sync::OnceCell;
 use std::{
   fs,
   path::{Path, PathBuf},
@@ -20,23 +19,19 @@ impl Dirs {
     &self.0
   }
 
-  pub fn store_dir(&self) -> &Path {
-    static DIR: OnceCell<PathBuf> = OnceCell::new();
-    DIR.get_or_init(|| self.root().join("store"))
+  pub fn store_dir(&self) -> PathBuf {
+    self.root().join("store")
   }
 
-  pub fn state_dir(&self) -> &Path {
-    static DIR: OnceCell<PathBuf> = OnceCell::new();
-    DIR.get_or_init(|| self.root().join("var").join("nix"))
+  pub fn state_dir(&self) -> PathBuf {
+    self.root().join("var").join("nix")
   }
 
-  pub fn db_dir(&self) -> &Path {
-    static DIR: OnceCell<PathBuf> = OnceCell::new();
-    DIR.get_or_init(|| self.state_dir().join("db"))
+  pub fn db_dir(&self) -> PathBuf {
+    self.state_dir().join("db")
   }
 
-  pub fn temproots_dir(&self) -> &Path {
-    static DIR: OnceCell<PathBuf> = OnceCell::new();
-    DIR.get_or_init(|| self.state_dir().join("temproots"))
+  pub fn temproots_dir(&self) -> PathBuf {
+    self.state_dir().join("temproots")
   }
 }

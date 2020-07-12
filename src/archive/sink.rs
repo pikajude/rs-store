@@ -1,20 +1,42 @@
-use crate::store::ByteStream;
-use anyhow::Result;
+use crate::prelude::*;
 use async_recursion::async_recursion;
-use bytes::Bytes;
-use futures::{io::AsyncReadExt, sink::Sink, stream::TryStreamExt, AsyncRead};
-use libc::{S_IXGRP, S_IXOTH, S_IXUSR};
-use nix::sys::stat;
-use stat::Mode;
+use futures::{
+  io::{AsyncRead, AsyncReadExt},
+  stream::TryStreamExt,
+};
+use nix::sys::stat::*;
 use std::{
   borrow::Cow,
-  fs::Permissions,
   os::unix::io::AsRawFd,
   path::{Path, PathBuf},
-  pin::Pin,
-  task::{Context, Poll},
 };
 use tokio::fs::File;
+
+#[derive(Debug, Error)]
+pub enum ParseError {
+  #[error("input is not a Nix archive")]
+  InvalidNar,
+  #[error("an entry in the archive has multiple `type' fields, which is not allowed")]
+  MultipleTypeFields,
+  #[error("unknown archive type `{0}'")]
+  UnknownArchiveType(String),
+  #[error("nar contains invalid filename `{0}'")]
+  InvalidFilename(String),
+  #[error("invalid executable marker")]
+  ExecutableMarker,
+  #[error("expected {0}")]
+  Expected(&'static str),
+  #[error("unknown field `{0}'")]
+  UnknownField(String),
+  #[error("string is longer ({0} bytes) than allowed max {1}")]
+  StringTooLong(usize, usize),
+  #[error("non-zero padding in NAR")]
+  NonzeroPadding,
+}
+
+fn utf8_bytes(b: impl AsRef<[u8]>) -> String {
+  String::from_utf8_lossy(b.as_ref()).into()
+}
 
 #[async_trait]
 pub trait ParseSink {
@@ -23,19 +45,20 @@ pub trait ParseSink {
   async fn create_symlink(&mut self, path: Option<&Path>, target: PathBuf) -> Result<()>;
   async fn set_executable(&mut self) -> Result<()>;
   async fn allocate_contents(&mut self, size: usize) -> Result<()>;
-  async fn receive_contents<S: AsyncRead + Send>(&mut self, bytes: S) -> Result<()>;
+  async fn receive_contents<S: AsyncRead + Send + Unpin>(&mut self, bytes: S) -> Result<()>;
 }
 
-pub async fn parse_dump<S: ParseSink + Send, R: AsyncRead + Send + Unpin>(
+pub async fn parse_dump<S: ParseSink + Send, R: ByteStream + Send + Unpin>(
   sink: &mut S,
   source: &mut R,
 ) -> Result<()> {
   static NAR_MAGIC: &str = "nix-archive-1";
-  let vers = read_bytes_len(source, NAR_MAGIC.len()).await?;
+  let mut source = source.into_async_read();
+  let vers = read_bytes_len(&mut source, NAR_MAGIC.len()).await?;
   if vers != NAR_MAGIC.as_bytes() {
-    return Err(anyhow::anyhow!("mismatch"));
+    bail!(ParseError::InvalidNar);
   }
-  parse(sink, source, None).await
+  parse(sink, &mut source, None).await
 }
 
 #[async_recursion]
@@ -46,7 +69,7 @@ async fn parse<S: ParseSink + Send, R: AsyncRead + Send + Unpin>(
 ) -> Result<()> {
   let s = read_bytes(source).await?;
   if s != b"(" {
-    return Err(anyhow::anyhow!("bad archive"));
+    bail!(ParseError::InvalidNar);
   }
 
   #[derive(PartialEq, Eq)]
@@ -64,7 +87,7 @@ async fn parse<S: ParseSink + Send, R: AsyncRead + Send + Unpin>(
       b")" => break,
       b"type" => {
         if ty.is_some() {
-          return Err(anyhow::anyhow!("multiple type fields"));
+          bail!(ParseError::MultipleTypeFields);
         }
         let tagged_ty = read_bytes(source).await?;
         match &tagged_ty[..] {
@@ -79,27 +102,27 @@ async fn parse<S: ParseSink + Send, R: AsyncRead + Send + Unpin>(
           b"symlink" => {
             ty = Some(EntryType::Symlink);
           }
-          x => {
-            return Err(anyhow::anyhow!(
-              "bad archive type: {}",
-              String::from_utf8_lossy(x)
-            ))
-          }
+          x => bail!(ParseError::UnknownArchiveType(
+            String::from_utf8_lossy(x).into()
+          )),
         }
       }
       b"contents" if ty == Some(EntryType::File) => {
-        unimplemented!("parseContents");
+        let filesize = read_num(source).await?;
+        sink.allocate_contents(filesize).await?;
+        sink.receive_contents(source.take(filesize as u64)).await?;
+        read_padding(source, filesize).await?;
       }
       b"executable" if ty == Some(EntryType::File) => {
         let marker = read_bytes(source).await?;
         if marker != b"" {
-          return Err(anyhow::anyhow!("executable marker with non-empty value"));
+          bail!(ParseError::ExecutableMarker);
         }
         sink.set_executable().await?;
       }
       b"entry" if ty == Some(EntryType::Dir) => {
         if read_bytes(source).await? != b"(" {
-          return Err(anyhow::anyhow!("expected open tag"));
+          bail!(ParseError::Expected("open tag"));
         }
         let mut name = vec![];
         loop {
@@ -113,15 +136,12 @@ async fn parse<S: ParseSink + Send, R: AsyncRead + Send + Unpin>(
                 || name == b".."
                 || name.iter().any(|x| *x == b'/' || *x == 0)
               {
-                return Err(anyhow::anyhow!(
-                  "nar contains bad filename {}",
-                  String::from_utf8_lossy(&name)
-                ));
+                bail!(ParseError::InvalidFilename(utf8_bytes(&name)));
               }
             }
             b"node" => {
               if name.is_empty() {
-                return Err(anyhow::anyhow!("entry name is missing"));
+                bail!(ParseError::Expected("entry name"));
               }
               parse(
                 sink,
@@ -133,12 +153,7 @@ async fn parse<S: ParseSink + Send, R: AsyncRead + Send + Unpin>(
               )
               .await?;
             }
-            x => {
-              return Err(anyhow::anyhow!(
-                "nar contains bad filename {}",
-                String::from_utf8_lossy(x)
-              ))
-            }
+            x => bail!(ParseError::UnknownField(utf8_bytes(x))),
           }
         }
       }
@@ -148,12 +163,7 @@ async fn parse<S: ParseSink + Send, R: AsyncRead + Send + Unpin>(
           .create_symlink(path.as_deref(), String::from_utf8(target)?.into())
           .await?;
       }
-      x => {
-        return Err(anyhow::anyhow!(
-          "bad NAR field: {}",
-          String::from_utf8_lossy(x)
-        ))
-      }
+      x => bail!(ParseError::UnknownField(utf8_bytes(x))),
     }
   }
 
@@ -177,10 +187,7 @@ async fn read_num<R: AsyncRead + Unpin>(s: &mut R) -> Result<usize> {
 async fn read_bytes_len<R: AsyncRead + Unpin>(s: &mut R, max: usize) -> Result<Vec<u8>> {
   let len = read_num(s).await?;
   if len > max {
-    return Err(anyhow::anyhow!(
-      "string is longer than specified max {}",
-      max
-    ));
+    bail!(ParseError::StringTooLong(len, max));
   }
   let mut bytes = vec![0; len];
   s.read_exact(&mut bytes).await?;
@@ -197,7 +204,7 @@ async fn read_padding<R: AsyncRead + Unpin>(s: &mut R, len: usize) -> Result<()>
     let mut pad = vec![0; 8 - (len % 8)];
     s.read_exact(&mut pad).await?;
     if pad.iter().any(|x| *x > 0) {
-      return Err(anyhow::anyhow!("incorrect padding"));
+      bail!(ParseError::NonzeroPadding);
     }
   }
   Ok(())
@@ -219,15 +226,24 @@ impl RestoreSink {
   fn get_path(&self, p: Option<&Path>) -> Cow<Path> {
     p.map_or(Cow::Borrowed(&self.root), |p| Cow::Owned(self.root.join(p)))
   }
+
+  fn file(&mut self) -> Result<&mut File> {
+    self
+      .last_file
+      .as_mut()
+      .ok_or_else(|| anyhow!("nar sink is in an invalid state"))
+  }
 }
 
 #[async_trait]
 impl ParseSink for RestoreSink {
   async fn create_directory(&mut self, path: Option<&Path>) -> Result<()> {
+    trace!("creating directory {}", self.get_path(path).display());
     Ok(tokio::fs::create_dir(self.get_path(path)).await?)
   }
 
   async fn create_file(&mut self, path: Option<&Path>) -> Result<()> {
+    trace!("importing file {}", self.get_path(path).display());
     self.last_file = Some(tokio::fs::File::create(self.get_path(path)).await?);
     Ok(())
   }
@@ -237,22 +253,47 @@ impl ParseSink for RestoreSink {
   }
 
   async fn set_executable(&mut self) -> Result<()> {
-    if let Some(x) = self.last_file.as_ref() {
-      let stat = stat::fstat(x.as_raw_fd())?;
-      stat::fchmod(
-        x.as_raw_fd(),
-        unsafe { stat::Mode::from_bits_unchecked(stat.st_mode) }
-          | (stat::Mode::S_IXUSR | stat::Mode::S_IXGRP | stat::Mode::S_IXOTH),
-      )?;
-    }
+    let x = self.file()?;
+    let stat = fstat(x.as_raw_fd())?;
+    fchmod(
+      x.as_raw_fd(),
+      unsafe { Mode::from_bits_unchecked(stat.st_mode) }
+        | (Mode::S_IXUSR | Mode::S_IXGRP | Mode::S_IXOTH),
+    )?;
     Ok(())
   }
 
   async fn allocate_contents(&mut self, size: usize) -> Result<()> {
-    todo!()
+    // copied block from nix crate src
+    #[cfg(any(
+      target_os = "linux",
+      target_os = "android",
+      target_os = "emscripten",
+      target_os = "fuchsia",
+      any(target_os = "wasi", target_env = "wasi"),
+      target_os = "freebsd"
+    ))]
+    nix::fcntl::posix_fallocate(self.file()?.as_raw_fd(), 0, size as i64)?;
+    Ok(())
   }
 
-  async fn receive_contents<S: AsyncRead + Send>(&mut self, bytes: S) -> Result<()> {
-    todo!()
+  async fn receive_contents<S: AsyncRead + Send + Unpin>(&mut self, mut bytes: S) -> Result<()> {
+    use tokio::io::AsyncWriteExt;
+
+    let x = self.file()?;
+    let mut buf = [0; 65536];
+    let mut total = 0;
+    loop {
+      let len = bytes.read(&mut buf).await?;
+      total += len;
+      if len > 0 {
+        x.write_all(&buf[..len]).await?;
+      } else {
+        break;
+      }
+    }
+    trace!("imported {} bytes", total);
+
+    Ok(())
   }
 }

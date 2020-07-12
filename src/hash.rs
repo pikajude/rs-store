@@ -1,4 +1,4 @@
-use crate::{store::ByteStream, util};
+use crate::prelude::*;
 use anyhow::Result;
 use crypto::digest::Digest;
 use derive_more::Display;
@@ -14,9 +14,7 @@ use std::{
 mod context;
 mod sink;
 
-use bytes::Bytes;
 pub use context::Context;
-use futures::Stream;
 pub use sink::HashSink as Sink;
 
 #[derive(Debug, thiserror::Error)]

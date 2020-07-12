@@ -1,17 +1,17 @@
 use super::ByteStream;
 use crate::{
   archive::{ArchiveSink, PathFilter},
-  hash::{self, Encoding, Hash, HashType, Sink},
+  hash::{self, Hash, HashType},
   path::Path as StorePath,
   path_info::{PathInfo, ValidPathInfo},
+  prelude::*,
   Store,
 };
-use anyhow::{Context as _, Result};
-use bytes::Bytes;
 use crypto::digest::Digest;
 use db::Db;
 use dirs::Dirs;
-use futures::{lock::Mutex, Stream, TryStreamExt};
+use error::Error;
+use futures::{lock::Mutex, TryStreamExt};
 use lock::{FsExt2, LockType, PathLocks};
 use std::{
   borrow::Cow,
@@ -26,6 +26,7 @@ use tokio::{fs, io::AsyncWriteExt};
 
 mod db;
 mod dirs;
+mod error;
 mod gc;
 mod lock;
 
@@ -37,7 +38,7 @@ pub struct LocalStore {
 #[async_trait]
 impl Store for LocalStore {
   fn store_path(&self) -> Cow<Path> {
-    Cow::Borrowed(self.dirs.store_dir())
+    Cow::Owned(self.dirs.store_dir())
   }
 
   fn get_uri(&self) -> String {
@@ -100,6 +101,7 @@ impl Store for LocalStore {
           info.store_path
         )
       })?;
+
     if !self.is_valid_path(&info.store_path).await? {
       let mut locks = PathLocks::new();
       let real_path = self
@@ -113,20 +115,30 @@ impl Store for LocalStore {
 
         let mut hash_sink = hash::Context::new(HashType::SHA256);
 
-        let wrapped_source = source.and_then(|bytes| {
-          hash_sink.input(&bytes);
-          futures::future::ok(bytes)
-        });
-
-        crate::archive::restore_into(&real_path, wrapped_source).await?;
+        crate::archive::restore_into(
+          &real_path,
+          source.and_then(|bytes| {
+            hash_sink.input(&bytes);
+            futures::future::ok(bytes)
+          }),
+        )
+        .await?;
 
         let (hash, hash_len) = hash_sink.finish();
 
         if hash != info.nar_hash {
-          todo!("hash mismatch");
+          bail!(Error::NarHashMismatch {
+            path: self.print_store_path(&info.store_path).into(),
+            expected: info.nar_hash.clone(),
+            actual: hash
+          });
         }
         if hash_len != info.nar_size.unwrap_or_default() as usize {
-          todo!("path size mismatch");
+          bail!(Error::NarSizeMismatch {
+            path: self.print_store_path(&info.store_path).into(),
+            expected: info.nar_size.unwrap_or_default() as usize,
+            actual: hash_len
+          });
         }
 
         // self.auto_gc().await?;
@@ -173,7 +185,6 @@ impl Store for LocalStore {
       let mut h = ArchiveSink::new(crate::hash::Sink::new(algo));
       crate::archive::dump_path(&real_path, &mut h, &filter).await?;
       let (hash, size) = h.into_inner().finish();
-      trace!("{:?}", hash);
 
       // self.optimise_path(&real_path).await?;
 
@@ -199,11 +210,45 @@ impl Store for LocalStore {
 impl LocalStore {
   pub fn open(root: &Path) -> Result<Self> {
     let dirs = Dirs::new(root)?;
-    Ok(Self {
+    let this = Self {
       db: Mutex::new(Db::open(&dirs.db_dir().join("db.sqlite"), true)?),
       dirs,
-    })
+    };
+    this.make_store_writable()?;
+    Ok(this)
   }
+
+  #[cfg(target_os = "linux")]
+  fn make_store_writable(&self) -> Result<()> {
+    use nix::{mount::*, sched::*, sys::statvfs::*, unistd::getuid};
+
+    if !getuid().is_root() {
+      return Ok(());
+    }
+
+    let st = statvfs(&self.dirs.store_dir())?;
+    if st.flags().contains(FsFlags::ST_RDONLY) {
+      unshare(CloneFlags::CLONE_NEWNS)?;
+
+      mount::<Path, Path, str, Path>(
+        None,
+        &self.dirs.store_dir(),
+        Some("none"),
+        MsFlags::MS_REMOUNT | MsFlags::MS_BIND,
+        None,
+      )
+      .with_context(|| {
+        format!(
+          "while trying to remount `{}' as writable",
+          self.dirs.store_dir().display()
+        )
+      })?;
+    }
+    Ok(())
+  }
+
+  #[cfg(not(target_os = "linux"))]
+  fn make_store_writable(&self) -> Result<()> {}
 }
 
 #[cfg(test)]
@@ -255,10 +300,10 @@ mod tests {
               "mabn5yhm39lr6kaqfp1b98sd4b8qr5cg-DisnixWebService-0.8",
             )?,
             deriver: None,
-            nar_hash: Hash::hash_bytes(b"", HashType::SHA256),
+            nar_hash: Hash::decode("sha256:0zgkbmzgyas2d5bjv3gads7qw5fn6zf18nszrdxrkpyz5ckk8syw")?,
             references: Default::default(),
             registration_time: SystemTime::now(),
-            nar_size: Some(1234),
+            nar_size: Some(20094232),
             signatures: Default::default(),
             content_addressed: Default::default(),
             ultimate: false,

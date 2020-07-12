@@ -1,8 +1,11 @@
+use crate::prelude::*;
 use anyhow::Result;
 use futures::Future;
-use libc::{c_int, flock, EINTR, EWOULDBLOCK, LOCK_EX, LOCK_NB, LOCK_SH, LOCK_UN};
+use nix::{
+  errno::EWOULDBLOCK,
+  fcntl::{self, FlockArg},
+};
 use std::{
-  io::Error,
   os::unix::io::AsRawFd,
   path::PathBuf,
   pin::Pin,
@@ -18,11 +21,12 @@ pub enum LockType {
 }
 
 impl LockType {
-  fn flag(self) -> c_int {
+  fn flag(self) -> FlockArg {
+    use FlockArg::*;
     match self {
-      Self::Read => LOCK_SH,
-      Self::Write => LOCK_EX,
-      Self::Unlock => LOCK_UN,
+      Self::Read => LockSharedNonblock,
+      Self::Write => LockExclusiveNonblock,
+      Self::Unlock => UnlockNonblock,
     }
   }
 }
@@ -34,14 +38,11 @@ pub trait FsExt2 {
 
 impl FsExt2 for fs::File {
   fn try_lock(&self, ty: LockType) -> Result<bool> {
-    if unsafe { flock(self.as_raw_fd(), ty.flag() | LOCK_NB) } != 0 {
-      let errno = nix::errno::errno();
-      if errno == EWOULDBLOCK {
+    if let Err(e) = fcntl::flock(self.as_raw_fd(), ty.flag()) {
+      if e.as_errno() == Some(EWOULDBLOCK) {
         return Ok(false);
       }
-      if errno != EINTR {
-        return Err(Error::from_raw_os_error(errno).into());
-      }
+      bail!(e);
     }
     Ok(true)
   }
@@ -60,14 +61,11 @@ impl<'a> Future for FileLock<'a> {
   type Output = Result<()>;
 
   fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
-    if unsafe { flock(self.file.as_raw_fd(), self.ty.flag() | LOCK_NB) } != 0 {
-      let errno = nix::errno::errno();
-      if errno == EWOULDBLOCK {
+    if let Err(e) = fcntl::flock(self.file.as_raw_fd(), self.ty.flag()) {
+      if e.as_errno() == Some(EWOULDBLOCK) {
         return Poll::Pending;
       }
-      if errno != EINTR {
-        return Poll::Ready(Err(Error::from_raw_os_error(errno).into()));
-      }
+      return Poll::Ready(Err(e.into()));
     }
     Poll::Ready(Ok(()))
   }
@@ -124,6 +122,8 @@ impl PathLocks {
   }
 
   pub fn unlock(&mut self) {
-    self.0.clear()
+    for it in self.0.drain(..) {
+      let _ = it.try_lock(LockType::Unlock);
+    }
   }
 }

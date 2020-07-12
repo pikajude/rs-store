@@ -1,14 +1,12 @@
-use crate::store::ByteStream;
+use crate::prelude::*;
 use anyhow::Result;
-use async_recursion::async_recursion;
-use bytes::Bytes;
 use futures::{
   sink::{Sink, SinkExt},
-  stream::{StreamExt, TryStreamExt},
-  Stream,
+  stream::StreamExt,
 };
+use nix::sys::stat::Mode;
 use sink::RestoreSink;
-use std::{error::Error, path::Path};
+use std::{error::Error, os::unix::fs::MetadataExt, path::Path};
 use tokio::fs;
 
 mod sink;
@@ -123,15 +121,9 @@ where
   if meta.file_type().is_file() {
     sink.write_str("type").await?;
     sink.write_str("regular").await?;
-    #[cfg(unix)]
-    {
-      use nix::sys::stat::Mode;
-      use std::os::unix::fs::MetadataExt;
-
-      if Mode::from_bits_truncate(meta.mode()).contains(Mode::S_IXUSR) {
-        sink.write_str("executable").await?;
-        sink.write_str("").await?;
-      }
+    if Mode::from_bits_truncate(meta.mode()).contains(Mode::S_IXUSR) {
+      sink.write_str("executable").await?;
+      sink.write_str("").await?;
     }
 
     dump_file(path, meta.len(), sink).await?;
@@ -145,20 +137,14 @@ where
         sink.write_str("(").await?;
         sink.write_str("name").await?;
 
-        #[cfg(unix)]
-        {
-          let name = file.file_name();
-          sink
-            .write_str(
-              name
-                .to_str()
-                .ok_or_else(|| anyhow::anyhow!("Invalid filename"))?,
-            )
-            .await?;
-        }
-
-        #[cfg(not(unix))]
-        compile_error!("FIXME: implement filename() on Windows");
+        let name = file.file_name();
+        sink
+          .write_str(
+            name
+              .to_str()
+              .ok_or_else(|| anyhow::anyhow!("Invalid filename"))?,
+          )
+          .await?;
 
         sink.write_str("node").await?;
         dump_path(&file.path(), sink, filter).await?;
@@ -173,10 +159,7 @@ where
       .write_str(fs::canonicalize(path).await?.display().to_string())
       .await?;
   } else {
-    return Err(anyhow::anyhow!(
-      "path `{}' has an unsupported type",
-      path.display()
-    ));
+    bail!("path `{}' has an unsupported type", path.display());
   }
 
   sink.write_str(")").await?;
@@ -209,11 +192,7 @@ where
 
 pub async fn restore_into<P: AsRef<Path>, S: ByteStream + Send + Unpin>(
   path: P,
-  source: S,
+  mut source: S,
 ) -> Result<()> {
-  sink::parse_dump(
-    &mut RestoreSink::new(path.as_ref()),
-    &mut source.into_async_read(),
-  )
-  .await
+  sink::parse_dump(&mut RestoreSink::new(path.as_ref()), &mut source).await
 }

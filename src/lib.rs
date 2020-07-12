@@ -8,6 +8,7 @@ pub mod base32;
 pub mod hash;
 pub mod path;
 pub mod path_info;
+mod prelude;
 pub mod store;
 pub mod util;
 
